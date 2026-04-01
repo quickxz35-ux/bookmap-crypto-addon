@@ -41,7 +41,7 @@ class MicroPriceAnalyzer:
     def __init__(self, alias: str, pips: float):
         self.alias = alias
         self.pips = pips
-        self.price_history: deque[PricePoint] = deque()
+        self.price_history: Deque[PricePoint] = deque()
         self.last_status_update = 0
         
         # Metrics
@@ -99,6 +99,8 @@ class MicroPriceAnalyzer:
                 self.micro_trend = "Slightly Bearish"
             else:
                 self.micro_trend = "Neutral/Noisy"
+        else:
+            self.micro_trend = "Neutral"
 
     def generate_summary(self) -> str:
         lines = []
@@ -148,7 +150,7 @@ class StandaloneAddonRuntime:
         
         analyzer.on_trade(price, size, side_code)
         
-        # Throttled write (every 2000ms max to save resources)
+        # [NEW LITE MODE] Throttled write (every 2.0s max to save resources)
         now = time.time()
         if now - analyzer.last_status_update > 2.0:
             analyzer.last_status_update = now
@@ -166,7 +168,6 @@ class StandaloneAddonRuntime:
 RUNTIME: Optional[StandaloneAddonRuntime] = None
 
 def handle_subscribe(addon, alias, full_name, is_crypto, pips, size_multiplier, inst_multiplier, features):
-    global RUNTIME
     assert RUNTIME is not None
     RUNTIME.subscribe(alias, pips)
     bm.subscribe_to_trades(addon, alias, 9999) # Separate request ID
