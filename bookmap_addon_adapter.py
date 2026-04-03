@@ -12,13 +12,127 @@ events, feeds the local signal engine, and emits alerts through:
 
 from __future__ import annotations
 
+from typing import Any, Dict, List, Optional, Tuple, Deque, Union
+from collections import deque
+from enum import Enum
+from pathlib import Path
+from dataclasses import dataclass, field, asdict
+import sys
 import json
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+import codecs
+
+# --- NITRO: HARDSIDE INTEL RUNTIME ---
+import numpy as np # Intel mkl-accelerated math
+
+# Configuration for Micro-Price Analysis
+STATUS_DIR = Path(r"C:\Bookmap\runs")
+WINDOW_SIZE_MS = 1000  # 1-second sliding window for velocity
+MICRO_TREND_TICKS = 10  # Number of last price points to analyze for HH/LL
+
+@dataclass
+class PricePoint:
+    timestamp_ms: int
+    price_level: int
+    size: float
+    side: str
+
+class MicroPriceAnalyzer:
+    def __init__(self, alias: str, pips: float):
+        self.alias = alias
+        self.pips = pips
+        self.price_history: Deque[PricePoint] = deque()
+        self.last_status_update = 0.0
+        
+        # Metrics
+        self.current_velocity = 0.0  # Ticks per second
+        self.displacement_efficiency = 1.0  # 1.0 = normal, < 0.2 = heavy absorption
+        self.micro_trend = "Neutral"  # Neutral, Bullish, Bearish
+        self.total_buy_vol = 0.0
+        self.total_sell_vol = 0.0
+
+    def on_trade(self, price: float, size: float, side: str):
+        now_ms = int(time.time() * 1000)
+        price_level = int(round(price / self.pips))
+        side_norm = side.lower()
+        
+        # 1. Update History
+        self.price_history.append(PricePoint(now_ms, price_level, size, side_norm))
+        if side_norm == "buy": self.total_buy_vol += size
+        else: self.total_sell_vol += size
+        
+        # 2. Prune old history
+        while self.price_history and (now_ms - self.price_history[0].timestamp_ms > WINDOW_SIZE_MS):
+            old = self.price_history.popleft()
+            if old.side == "buy": self.total_buy_vol -= old.size
+            else: self.total_sell_vol -= old.size
+
+        # 3. Calculate Metrics
+        self._calculate_metrics()
+
+    def _calculate_metrics(self):
+        if len(self.price_history) < 2:
+            return
+
+        # A. Velocity: (Latest - Oldest Price) / Duration
+        price_diff = self.price_history[-1].price_level - self.price_history[0].price_level
+        duration_sec = (self.price_history[-1].timestamp_ms - self.price_history[0].timestamp_ms) / 1000.0
+        if duration_sec > 0:
+            self.current_velocity = abs(price_diff) / duration_sec
+        
+        # B. Displacement Efficiency: Abs(Price Diff) / Total Size
+        total_size = sum(p.size for p in self.price_history)
+        if total_size > 0:
+            self.displacement_efficiency = abs(price_diff) / (total_size / 10.0)
+            
+        # C. Micro-Trend Detection (Last 10 points)
+        recent_prices = [p.price_level for p in list(self.price_history)[-10:]]
+        if len(recent_prices) >= 5:
+            if all(recent_prices[i] >= recent_prices[i-1] for i in range(1, len(recent_prices))):
+                self.micro_trend = "Aggressive Bullish"
+            elif all(recent_prices[i] <= recent_prices[i-1] for i in range(1, len(recent_prices))):
+                self.micro_trend = "Aggressive Bearish"
+            elif recent_prices[-1] > recent_prices[0]:
+                self.micro_trend = "Slightly Bullish"
+            elif recent_prices[-1] < recent_prices[0]:
+                self.micro_trend = "Slightly Bearish"
+            else:
+                self.micro_trend = "Neutral/Noisy"
+
+    def generate_summary(self) -> str:
+        lines = []
+        lines.append(f"MICRO-PRICE ANALYSIS: {self.alias}")
+        lines.append(f"TIMESTAMP: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("-" * 30)
+        lines.append(f"VELOCITY: {self.current_velocity:.2f} Ticks/Sec")
+        
+        efficiency_status = "Free Movement"
+        if self.displacement_efficiency < 0.2: efficiency_status = "⚠️ HEAVY ABSORPTION"
+        elif self.displacement_efficiency < 0.5: efficiency_status = "Mild Resistance"
+        
+        lines.append(f"EFFICIENCY: {self.displacement_efficiency:.4f} ({efficiency_status})")
+        lines.append(f"MICRO-TREND: {self.micro_trend}")
+        
+        prediction = "Observing..."
+        if self.micro_trend == "Aggressive Bullish" and self.displacement_efficiency > 0.8:
+            prediction = "READY TO PUMP"
+        elif self.micro_trend == "Aggressive Bearish" and self.displacement_efficiency > 0.8:
+            prediction = "READY TO DUMP"
+        elif self.displacement_efficiency < 0.1 and self.current_velocity < 1.0:
+            prediction = "ACCUMULATION/DISTRIBUTION"
+            
+        lines.append(f"PREDICTION: {prediction}")
+        return "\n".join(lines)
+
+# Nitro: Force UTF-8 encoding for stdout/stderr to handle emojis in Windows terminal
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except (AttributeError, ValueError):
+        # Fallback for older python environments often found in embedded systems
+        sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
 
 from bookmap_signal_engine import BookmapSignalEngine
 from bookmap_signal_models import AlertRecord, EngineConfig, NormalizedBookmapEvent, TrackedLevel, FeatureSnapshot
@@ -93,6 +207,17 @@ def _parse_float_setting(value: Any, minimum: float, maximum: float, fallback: f
     return max(minimum, min(maximum, parsed))
 
 
+def _parse_bool_setting(value: Any, fallback: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off", ""}:
+        return False
+    return fallback
+
+
 def _parse_color_setting(value: Any, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
     if not isinstance(value, (tuple, list)) or len(value) != 3:
         return fallback
@@ -105,7 +230,12 @@ def _parse_color_setting(value: Any, fallback: tuple[int, int, int]) -> tuple[in
 @dataclass(slots=True)
 class ConsoleAlertSink:
     def emit(self, alert: AlertRecord) -> None:
-        print(f"[{alert.instrument}] {alert.alert_type}: {alert.message}", flush=True)
+        try:
+            print(f"[{alert.instrument}] {alert.alert_type}: {alert.message}", flush=True)
+        except UnicodeEncodeError:
+            # Fallback: Strip characters that the current console cannot handle
+            clean_msg = alert.message.encode('ascii', 'ignore').decode('ascii')
+            print(f"[{alert.instrument}] {alert.alert_type}: {clean_msg} [Unicode Stripped]", flush=True)
 
 
 @dataclass(slots=True)
@@ -113,8 +243,12 @@ class JsonlAlertSink:
     path: Path
 
     def emit(self, alert: AlertRecord) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
+        # Use ticker-specific filename to prevent multi-instance lock crashes
+        safe_alias = str(alert.instrument).replace('@', '_').replace('/', '_')
+        ticker_path = self.path.parent / f"{self.path.stem}_{safe_alias}{self.path.suffix}"
+        
+        ticker_path.parent.mkdir(parents=True, exist_ok=True)
+        with ticker_path.open("a", encoding="utf-8") as handle:
             handle.write(
                 json.dumps(
                     {
@@ -146,7 +280,11 @@ class JsonStateSink:
         latest_path = self.latest_dir / f"{alias}_latest.json"
         latest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-        with self.history_path.open("a", encoding="utf-8") as handle:
+        # Isolated history path per ticker
+        safe_alias = str(alias).replace('@', '_').replace('/', '_')
+        ticker_history_path = self.history_path.parent / f"{self.history_path.stem}_{safe_alias}{self.history_path.suffix}"
+
+        with ticker_history_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload) + "\n")
 
 
@@ -161,9 +299,10 @@ class InstrumentRuntime:
     indicator_ids: Dict[str, int] = field(default_factory=dict)
     request_ids: Dict[str, int] = field(default_factory=dict)
     supported_features: Dict[str, object] = field(default_factory=dict)
-    bookmap_alert_popups_enabled: bool = True
+    bookmap_alert_popups_enabled: bool = DEFAULT_ENABLE_BOOKMAP_ALERT_POPUPS
     initialized: bool = False  # True after first on_interval fires
     last_ui_update_time: float = 0.0  # Per-instrument throttling
+    last_snapshot_emit_time: float = 0.0
     smoothed_indicator_values: Dict[str, float] = field(default_factory=dict)
     indicator_colors: Dict[str, tuple[int, int, int]] = field(
         default_factory=lambda: {
@@ -177,6 +316,13 @@ class InstrumentRuntime:
     short_bias_timeframe_minutes: int = 5
     net_bias_timeframe_minutes: int = 5
     top_book_imbalance_timeframe_minutes: int = 1
+    subscriptions_started: bool = False
+    analyzer: MicroPriceAnalyzer = field(init=False)
+    _init_time: float = field(init=False, default=0.0)
+
+    def __post_init__(self) -> None:
+        self.analyzer = MicroPriceAnalyzer(self.alias, self.pips)
+        self._init_time = time.time()
 
 
 class BookmapAddonRuntime:
@@ -196,7 +342,6 @@ class BookmapAddonRuntime:
         self.pending_response_requests: Dict[int, tuple[str, str]] = {}
         self.callback_counts: Dict[str, int] = {"depth": 0, "trade": 0, "interval": 0}
         self.active_log_file = None
-        self.last_snapshot_time = 0
         self._next_request_id_value = 1000
         self._subscribe_lock = threading.Lock()  # Serialize concurrent instrument subscriptions
 
@@ -263,18 +408,14 @@ class BookmapAddonRuntime:
         # Settings MUST be registered here in subscribe_instrument — Bookmap
         # requires it during the instrument info callback, not deferred.
         self._register_settings(alias)
-
-        # Force subscribe to feeds. Some bridges report depth as unsupported
-        # even when it's available. 
-        bm.subscribe_to_depth(self.addon, alias, depth_request_id)
-        bm.subscribe_to_trades(self.addon, alias, trades_request_id)
-
-        # Register indicators IMMEDIATELY during initialization
-        # Bookmap forbids registration outside of CustomModule#initialize
+        # Indicators follow the same rule: they must be registered during
+        # instrument initialization, not from a delayed timer.
         self._register_indicators(alias)
 
-        # Disk write only — safe on background thread
-        self._enqueue_write(self._emit_heartbeat_snapshot, runtime, "instrument subscribed")
+        # Wait to start market-data subscriptions until Bookmap is already
+        # dispatching interval callbacks for this specific instrument.
+        runtime.subscriptions_started = False
+        write_runtime_probe(f"[{alias}] instrument initialized; awaiting interval before subscriptions")
 
     def unsubscribe_instrument(self, alias: str) -> None:
         self.instruments.pop(alias, None)
@@ -323,7 +464,7 @@ class BookmapAddonRuntime:
                 write_runtime_probe(f"SUCCESS: indicator {indicator_name} for {alias_p} registered (id: {indicator_id})")
 
     def on_setting_change(self, addon: Any, alias: str, setting_name: str, field_type: str, new_value: Any) -> None:
-        del addon, field_type
+        del addon
         runtime = self.instruments.get(alias)
         if runtime is None:
             return
@@ -331,7 +472,10 @@ class BookmapAddonRuntime:
         config = runtime.engine.config
 
         if setting_name == SETTING_ENABLE_POPUPS:
-            runtime.bookmap_alert_popups_enabled = bool(new_value)
+            runtime.bookmap_alert_popups_enabled = _parse_bool_setting(
+                new_value,
+                runtime.bookmap_alert_popups_enabled,
+            )
         elif setting_name == SETTING_NEAR_BOOK_TICKS:
             config.near_book_ticks = _parse_int_setting(new_value, 1, 50, config.near_book_ticks)
         elif setting_name == SETTING_FAST_WINDOW_SECONDS:
@@ -448,7 +592,7 @@ class BookmapAddonRuntime:
 
         if result.alerts:
             for alert in result.alerts:
-                self._handle_alert(alert)
+                self._handle_alert(runtime, alert)
 
         if result.snapshot is not None:
             self._update_indicators_throttled(runtime, result)
@@ -472,6 +616,18 @@ class BookmapAddonRuntime:
             elif side_val == 2:
                 side = "sell"
 
+        # 6. NITRO MERGE: Forward to Micro-Price Analyzer
+        # SAFETY: Ensure we don't fire events into a half-open bridge
+        if hasattr(runtime, 'analyzer'):
+            runtime.analyzer.on_trade(price, size, side)
+            
+            # Throttled write to status file
+            now = time.time()
+            # Only start status updates after a 2-second stabilization window
+            if now - runtime.analyzer.last_status_update > 2.0 and (now - getattr(runtime, '_init_time', 0) > 2.0):
+                runtime.analyzer.last_status_update = now
+                self._write_queue.put((self._write_ticker_status, (alias, runtime.analyzer.generate_summary())))
+
         # Calculate integer price level for trades
         price_level = int(round(price / runtime.pips))
 
@@ -494,7 +650,7 @@ class BookmapAddonRuntime:
         
         if result.alerts:
             for alert in result.alerts:
-                self._handle_alert(alert)
+                self._handle_alert(runtime, alert)
 
         self._update_indicators_throttled(runtime, result)
 
@@ -504,6 +660,8 @@ class BookmapAddonRuntime:
         if runtime is None:
             return
 
+        self._ensure_market_data_subscriptions(runtime)
+
         self.callback_counts["interval"] += 1
         if self.callback_counts["interval"] % 50 == 0:
             write_runtime_probe(f"on_interval {alias} (count: {self.callback_counts['interval']})")
@@ -511,6 +669,7 @@ class BookmapAddonRuntime:
         best_bid_level, best_ask_level = self._get_bbo_levels(runtime)
         if self.callback_counts["interval"] % 50 == 0:
             write_runtime_probe(f"interval bbo {alias} bid={best_bid_level} ask={best_ask_level}")
+            
         event = NormalizedBookmapEvent(
             timestamp_ns=self._now_ns(),
             instrument=alias,
@@ -521,24 +680,63 @@ class BookmapAddonRuntime:
         result = self._process_event(runtime, event)
         if result.alerts:
             for alert in result.alerts:
-                self._handle_alert(alert)
+                self._handle_alert(runtime, alert)
         if result.snapshot is not None:
             self._update_indicators_throttled(runtime, result)
 
-    def _handle_alert(self, alert: AlertRecord) -> None:
+    def _ensure_market_data_subscriptions(self, runtime: InstrumentRuntime) -> None:
+        if runtime.subscriptions_started:
+            return
+
+        # Give the instrument a short moment to finish Bookmap-side activation
+        # before we request depth/trade streams.
+        if time.time() - runtime._init_time < 2.0:
+            return
+
+        depth_request_id = runtime.request_ids.get("depth")
+        trades_request_id = runtime.request_ids.get("trades")
+        if depth_request_id is None or trades_request_id is None:
+            return
+
+        try:
+            write_runtime_probe(f"[{runtime.alias}] Starting on-interval subscriptions")
+            bm.subscribe_to_depth(self.addon, runtime.alias, depth_request_id)
+            bm.subscribe_to_trades(self.addon, runtime.alias, trades_request_id)
+            runtime.subscriptions_started = True
+            write_runtime_probe(f"[{runtime.alias}] On-interval subscriptions complete")
+        except Exception as exc:
+            write_runtime_probe(f"[{runtime.alias}] Subscription start failed: {exc}")
+
+    def _handle_alert(self, runtime: InstrumentRuntime, alert: AlertRecord) -> None:
         # Priority 1 (Standard) and Priority 5 (POI/Absorption) are shown to the user
         if alert.priority in {1, 5}:
             if alert.priority == 5:
-                # Big bold message in the technical logs for the AI/User
-                print(f"\n[!!! POI DETECTED !!!] {alert.message} | Price: {alert.price}\n", flush=True)
+                # Strip emojis for Windows console compatibility to avoid encoding errors
+                clean_msg = alert.message.encode('ascii', 'ignore').decode('ascii')
+                print(f"\n[!!! POI DETECTED !!!] {clean_msg} | Price: {alert.price}\n", flush=True)
             
             self.console_sink.emit(alert)
             self.jsonl_sink.emit(alert)
         
-        if alert.priority in {1, 5} and bm is not None:
+        # Only send to Bookmap UI if popups are enabled in the settings
+        if alert.priority in {1, 5} and bm is not None and runtime.bookmap_alert_popups_enabled:
             # Special prefix for extreme priority alerts in Bookmap message log
-            prefix = "🔥 POI: " if alert.priority == 5 else ""
+            # Use ASCII only prefix to avoid crash in certain environments
+            prefix = "[POI]: " if alert.priority == 5 else ""
             bm.send_user_message(self.addon, alert.instrument, f"{prefix}{alert.message}")
+
+    def _write_ticker_status(self, alias: str, summary: str) -> None:
+        # Isolated status writes per ticker to prevent file-lock contention
+        # This allows the AI Brain to see every ticker context simultaneously
+        safe_alias = str(alias).replace('@', '_').replace('/', '_')
+        status_file = STATUS_DIR / f"status_{safe_alias}.txt"
+        
+        try:
+            status_file.parent.mkdir(parents=True, exist_ok=True)
+            status_file.write_text(summary, encoding="utf-8")
+        except Exception as e:
+            # Silent failure for IO in high-frequency trading context
+            pass
 
     def _process_event(self, runtime: InstrumentRuntime, event: NormalizedBookmapEvent):
         # This was redundant since on_depth/on_trade handle their own engine calls now
@@ -766,6 +964,12 @@ class BookmapAddonRuntime:
         except (TypeError, ValueError):
             return None
 
+    def _write_ticker_status(self, alias: str, summary: str) -> None:
+        """Saves the micro-price analysis summary to a ticker-specific file."""
+        STATUS_DIR.mkdir(parents=True, exist_ok=True)
+        safe_alias = alias.replace('@', '_').replace('/', '_')
+        status_file = STATUS_DIR / f"status_{safe_alias}.txt"
+        status_file.write_text(summary, encoding="utf-8")
     def _background_writer(self) -> None:
         """Drain the write queue on a private thread so callbacks never block."""
         while True:
@@ -794,8 +998,8 @@ class BookmapAddonRuntime:
         self._update_indicators(runtime)  # RPC call – fast, stays on this thread
 
         # Disk writes go to the background thread (Reduced to 2.0s as approved)
-        if now - self.last_snapshot_time > 2.0:
-            self.last_snapshot_time = now
+        if now - runtime.last_snapshot_emit_time > 2.0:
+            runtime.last_snapshot_emit_time = now
             if result is not None and result.snapshot is not None:
                 self._enqueue_write(self._emit_state_snapshot, runtime, result)
             else:
@@ -829,9 +1033,6 @@ class BookmapAddonRuntime:
         if net_bias_indicator_id is not None:
             net_bias_display = self._windowed_net_bias(runtime, runtime.net_bias_timeframe_minutes)
             bm.add_point(self.addon, runtime.alias, net_bias_indicator_id, net_bias_display)
-            # Add a zero line reference for the net bias oscillation
-            # This helps the user see if they are actually crossing zero in the subchart
-            bm.add_point(self.addon, runtime.alias, net_bias_indicator_id, 0.0)
 
     def _windowed_bias_strength(self, runtime: InstrumentRuntime, minutes: int, direction: str) -> float:
         if direction == "long":
@@ -1198,10 +1399,12 @@ class BookmapAddonRuntime:
 
 
 def write_runtime_probe(message: str) -> None:
-    probe_path = Path(r"C:\Bookmap\runs\adapter_runtime_probe.txt")
+    import os, time
+    pid = os.getpid()
+    probe_path = Path(rf"C:\Bookmap\runs\adapter_runtime_probe_{pid}.txt")
     probe_path.parent.mkdir(parents=True, exist_ok=True)
     with probe_path.open("a", encoding="utf-8") as handle:
-        handle.write(message + "\n")
+        handle.write(f"[{time.strftime('%H:%M:%S')}] " + message + "\n")
 
 
 RUNTIME: Optional[BookmapAddonRuntime] = None
@@ -1217,22 +1420,22 @@ def handle_subscribe_instrument(
     instrument_multiplier: float,
     supported_features: Dict[str, object],
 ) -> None:
-    assert RUNTIME is not None
-    RUNTIME.subscribe_instrument(
-        alias,
-        full_name,
-        is_crypto,
-        pips,
-        size_multiplier,
-        instrument_multiplier,
-        supported_features,
-    )
-
+    global RUNTIME
+    if RUNTIME:
+        RUNTIME.subscribe_instrument(
+            alias,
+            full_name,
+            is_crypto,
+            pips,
+            size_multiplier,
+            instrument_multiplier,
+            supported_features,
+        )
 
 def handle_unsubscribe_instrument(addon: Any, alias: str) -> None:
-    del addon
-    assert RUNTIME is not None
-    RUNTIME.unsubscribe_instrument(alias)
+    global RUNTIME
+    if RUNTIME:
+        RUNTIME.unsubscribe_instrument(alias)
 
 
 def main(
@@ -1274,7 +1477,13 @@ def main(
         bm.on_response_data_handler(addon, RUNTIME.on_response_data)
         write_runtime_probe("legacy response data handler added")
 
-    write_runtime_probe("starting addon")
+    # NITRO: Jitter delay to prevent simultaneous multi-ticker RPC handshakes
+    import time, random
+    jitter = random.uniform(0.5, 2.5) # Random delay between 0.5 and 2.5 seconds
+    time.sleep(jitter)
+    
+    # Start the addon
+    write_runtime_probe(f"starting addon with jitter {jitter:.2f}")
     bm.start_addon(addon, handle_subscribe_instrument, handle_unsubscribe_instrument)
     write_runtime_probe("addon started")
     bm.wait_until_addon_is_turned_off(addon)
