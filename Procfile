@@ -1,0 +1,10 @@
+scout_sentiment: python scout_sentiment.py
+scout_derivatives: python scout_derivatives.py
+scout_whale: python scout_whale.py
+scout_wallet: python scout_wallet.py
+analyst_wallet: python analyst_wallet.py
+analyst_narrative: python analyst_narrative.py
+analyst_technical: python analyst_technical.py
+analyst_long_term: python analyst_long_term.py
+analyst_scalping: python analyst_scalping.py
+postman: python outbox_processor.py

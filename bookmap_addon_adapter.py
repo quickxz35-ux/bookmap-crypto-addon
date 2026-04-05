@@ -152,6 +152,7 @@ except ImportError:  # pragma: no cover
 DEFAULT_ENABLE_BOOKMAP_ALERT_POPUPS = False
 PRELOAD_SNAPSHOT_HISTORY_ON_STARTUP = False
 TYPEABLE_SETTING_SUFFIX = "\u200b"
+NUMERIC_SETTING_SUFFIX = "\u200c"
 DISPLAY_SMOOTHING_ALPHA_BIAS = 0.35
 DISPLAY_SMOOTHING_ALPHA_IMBALANCE = 0.25
 DEFAULT_LONG_BIAS_COLOR = (0, 255, 0)
@@ -160,18 +161,18 @@ DEFAULT_TOP_BOOK_IMBALANCE_COLOR = (64, 160, 255)
 DEFAULT_NET_BIAS_COLOR = (255, 215, 0)
 
 SETTING_ENABLE_POPUPS = "SHOW ALERT POPUPS"
-SETTING_NEAR_BOOK_TICKS = ">> HOW FAR FROM PRICE TO SCAN FOR S/R ACTIVITY" + TYPEABLE_SETTING_SUFFIX
-SETTING_FAST_WINDOW_SECONDS = ">> HOW MANY RECENT SECONDS TO MEASURE BUYING, SELLING, STACKING, AND PULLING" + TYPEABLE_SETTING_SUFFIX
-SETTING_CONTEXT_WINDOW_MINUTES = ">> HOW MANY RECENT MINUTES TO MEASURE BUYING, SELLING, STACKING, AND PULLING" + TYPEABLE_SETTING_SUFFIX
-SETTING_PERSISTENCE_SECONDS = ">> HOW LONG A LEVEL MUST REMAIN MEANINGFUL IN SIZE TO COUNT AS S/R" + TYPEABLE_SETTING_SUFFIX
-SETTING_RELOAD_SECONDS = ">> HOW FAST A LEVEL MUST REFILL TO COUNT AS DEFENDED AGAIN" + TYPEABLE_SETTING_SUFFIX
-SETTING_LARGE_LEVEL_FACTOR = ">> HOW MUCH BIGGER THAN NEARBY LEVELS TO COUNT AS S/R" + TYPEABLE_SETTING_SUFFIX
-SETTING_IMBALANCE_THRESHOLD = ">> SCANNED ORDER BOOK IMBALANCE SENSITIVITY" + TYPEABLE_SETTING_SUFFIX
-SETTING_AGGRESSION_THRESHOLD = ">> HOW STRONG MARKET BUYING/SELLING PRESSURE MUST BE TO AFFECT BIAS" + TYPEABLE_SETTING_SUFFIX
-SETTING_LONG_BIAS_TIMEFRAME_MINUTES = ">> LONG BIAS WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX
-SETTING_SHORT_BIAS_TIMEFRAME_MINUTES = ">> SHORT BIAS WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX
-SETTING_NET_BIAS_TIMEFRAME_MINUTES = ">> NET BIAS WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX
-SETTING_TOP_BOOK_IMBALANCE_TIMEFRAME_MINUTES = ">> TOP BOOK IMBALANCE WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX
+SETTING_NEAR_BOOK_TICKS = ">> HOW FAR FROM PRICE TO SCAN FOR S/R ACTIVITY" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_FAST_WINDOW_SECONDS = ">> HOW MANY RECENT SECONDS TO MEASURE BUYING, SELLING, STACKING, AND PULLING" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_CONTEXT_WINDOW_MINUTES = ">> HOW MANY RECENT MINUTES TO MEASURE BUYING, SELLING, STACKING, AND PULLING" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_PERSISTENCE_SECONDS = ">> HOW LONG A LEVEL MUST REMAIN MEANINGFUL IN SIZE TO COUNT AS S/R" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_RELOAD_SECONDS = ">> HOW FAST A LEVEL MUST REFILL TO COUNT AS DEFENDED AGAIN" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_LARGE_LEVEL_FACTOR = ">> HOW MUCH BIGGER THAN NEARBY LEVELS TO COUNT AS S/R" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_IMBALANCE_THRESHOLD = ">> SCANNED ORDER BOOK IMBALANCE SENSITIVITY" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_AGGRESSION_THRESHOLD = ">> HOW STRONG MARKET BUYING/SELLING PRESSURE MUST BE TO AFFECT BIAS" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_LONG_BIAS_TIMEFRAME_MINUTES = ">> LONG BIAS WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_SHORT_BIAS_TIMEFRAME_MINUTES = ">> SHORT BIAS WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_NET_BIAS_TIMEFRAME_MINUTES = ">> NET BIAS WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
+SETTING_TOP_BOOK_IMBALANCE_TIMEFRAME_MINUTES = ">> TOP BOOK IMBALANCE WINDOW (MIN)" + TYPEABLE_SETTING_SUFFIX + NUMERIC_SETTING_SUFFIX
 
 
 def _add_string_setting_parameter(addon: Any, alias: str, parameter_name: str, default_value: str, reload_if_change: bool = False) -> None:
@@ -272,10 +273,57 @@ class JsonlAlertSink:
 class JsonStateSink:
     latest_dir: Path
     history_path: Path
+    brain_latest_path: Path
+    brain_history_path: Path
+
+    def _brain_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        brain_payload = payload.get("brain_feed")
+        if isinstance(brain_payload, dict) and brain_payload:
+            return brain_payload
+
+        market_state = payload.get("market_state", {})
+        features = payload.get("features", {})
+        display_metrics = payload.get("display_metrics", {})
+        return {
+            "timestamp_ns": payload.get("timestamp_ns"),
+            "instrument": payload.get("instrument"),
+            "market_state": {
+                "best_bid_level": market_state.get("best_bid_level"),
+                "best_ask_level": market_state.get("best_ask_level"),
+                "best_bid_price": market_state.get("best_bid_price"),
+                "best_ask_price": market_state.get("best_ask_price"),
+                "best_bid_size": market_state.get("best_bid_size"),
+                "best_ask_size": market_state.get("best_ask_size"),
+                "micro_price": market_state.get("micro_price"),
+                "visible_bid_levels": market_state.get("visible_bid_levels", []),
+                "visible_ask_levels": market_state.get("visible_ask_levels", []),
+            },
+            "orderflow": {
+                "top_book_imbalance": features.get("top_book_imbalance", 0.0),
+                "bid_stack_rate": features.get("bid_stack_rate", 0.0),
+                "ask_stack_rate": features.get("ask_stack_rate", 0.0),
+                "bid_pull_rate": features.get("bid_pull_rate", 0.0),
+                "ask_pull_rate": features.get("ask_pull_rate", 0.0),
+                "buy_aggressive_volume": features.get("buy_aggressive_volume", 0.0),
+                "sell_aggressive_volume": features.get("sell_aggressive_volume", 0.0),
+                "aggression_delta": features.get("aggression_delta", 0.0),
+                "aggression_ratio": features.get("aggression_ratio", 0.0),
+            },
+            "display_metrics": {
+                "display_long_bias": display_metrics.get("display_long_bias", 0.0),
+                "display_short_bias": display_metrics.get("display_short_bias", 0.0),
+                "display_net_bias": display_metrics.get("display_net_bias", 0.0),
+                "display_top_book_imbalance": display_metrics.get("display_top_book_imbalance", 0.0),
+            },
+            "micro_price_analysis": payload.get("micro_price_analysis", {}),
+            "heartbeat": bool(payload.get("heartbeat", False)),
+        }
 
     def emit(self, alias: str, payload: Dict[str, Any]) -> None:
         self.latest_dir.mkdir(parents=True, exist_ok=True)
         self.history_path.parent.mkdir(parents=True, exist_ok=True)
+        self.brain_latest_path.parent.mkdir(parents=True, exist_ok=True)
+        self.brain_history_path.parent.mkdir(parents=True, exist_ok=True)
 
         latest_path = self.latest_dir / f"{alias}_latest.json"
         latest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -286,6 +334,11 @@ class JsonStateSink:
 
         with ticker_history_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload) + "\n")
+
+        brain_payload = self._brain_payload(payload)
+        self.brain_latest_path.write_text(json.dumps(brain_payload, indent=2), encoding="utf-8")
+        with self.brain_history_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(brain_payload) + "\n")
 
 
 @dataclass(slots=True)
@@ -332,18 +385,27 @@ class BookmapAddonRuntime:
         alert_path: str = "runs/bookmap_alerts.jsonl",
         snapshot_dir: str = "runs/bookmap_snapshots",
         snapshot_history_path: str = "runs/bookmap_snapshots_history.jsonl",
+        brain_latest_path: str = "runs/brain_feed_latest.json",
+        brain_history_path: str = "runs/brain_feed_history.jsonl",
     ):
         self.addon = addon
         self.instruments: Dict[str, InstrumentRuntime] = {}
         self.console_sink = ConsoleAlertSink()
         self.jsonl_sink = JsonlAlertSink(Path(alert_path))
-        self.state_sink = JsonStateSink(Path(snapshot_dir), Path(snapshot_history_path))
+        self.state_sink = JsonStateSink(
+            Path(snapshot_dir),
+            Path(snapshot_history_path),
+            Path(brain_latest_path),
+            Path(brain_history_path),
+        )
         self.pending_indicator_requests: Dict[int, tuple[str, str]] = {}
         self.pending_response_requests: Dict[int, tuple[str, str]] = {}
         self.callback_counts: Dict[str, int] = {"depth": 0, "trade": 0, "interval": 0}
         self.active_log_file = None
         self._next_request_id_value = 1000
         self._subscribe_lock = threading.Lock()  # Serialize concurrent instrument subscriptions
+        self._ui_quiet_until = 0.0
+        self._settings_owner_alias: Optional[str] = None
 
         # Background writer: all disk I/O runs here so Bookmap callbacks never block
         self._write_queue: queue.Queue = queue.Queue(maxsize=200)
@@ -363,6 +425,11 @@ class BookmapAddonRuntime:
         supported_features: Dict[str, object],
     ) -> None:
         del full_name, is_crypto, instrument_multiplier
+        if self.instruments and alias not in self.instruments:
+            write_runtime_probe(
+                f"ignoring secondary instrument {alias}; active={sorted(self.instruments.keys())}; stable single-symbol mode"
+            )
+            return
         with self._subscribe_lock:  # One instrument at a time
             self._subscribe_instrument_locked(
                 alias, pips, size_multiplier, supported_features
@@ -375,6 +442,10 @@ class BookmapAddonRuntime:
         size_multiplier: float,
         supported_features: Dict[str, object],
     ) -> None:
+        write_runtime_probe(
+            f"subscribe requested for {alias}; existing={sorted(self.instruments.keys())}"
+        )
+        self._ui_quiet_until = max(self._ui_quiet_until, time.time() + 3.0)
         engine = BookmapSignalEngine(
             EngineConfig(
                 instrument=alias,
@@ -405,12 +476,15 @@ class BookmapAddonRuntime:
         self.pending_response_requests[depth_request_id] = (alias, "depth")
         self.pending_response_requests[trades_request_id] = (alias, "trades")
 
-        # Settings MUST be registered here in subscribe_instrument — Bookmap
-        # requires it during the instrument info callback, not deferred.
-        self._register_settings(alias)
-        # Indicators follow the same rule: they must be registered during
-        # instrument initialization, not from a delayed timer.
-        self._register_indicators(alias)
+        # Only the first instrument gets the full Bookmap UI lifecycle.
+        # Secondary instruments stay telemetry-only to avoid bridge crashes.
+        if self._settings_owner_alias is None:
+            self._register_settings(alias)
+            self._register_indicators(alias)
+        else:
+            write_runtime_probe(
+                f"telemetry-only secondary instrument {alias}; owner={self._settings_owner_alias}"
+            )
 
         # Wait to start market-data subscriptions until Bookmap is already
         # dispatching interval callbacks for this specific instrument.
@@ -418,7 +492,13 @@ class BookmapAddonRuntime:
         write_runtime_probe(f"[{alias}] instrument initialized; awaiting interval before subscriptions")
 
     def unsubscribe_instrument(self, alias: str) -> None:
-        self.instruments.pop(alias, None)
+        runtime = self.instruments.pop(alias, None)
+        removed_indicator_requests = sum(
+            1 for pending in self.pending_indicator_requests.values() if pending[0] == alias
+        )
+        removed_response_requests = sum(
+            1 for pending in self.pending_response_requests.values() if pending[0] == alias
+        )
         self.pending_indicator_requests = {
             request_id: pending
             for request_id, pending in self.pending_indicator_requests.items()
@@ -429,6 +509,21 @@ class BookmapAddonRuntime:
             for request_id, pending in self.pending_response_requests.items()
             if pending[0] != alias
         }
+        if runtime is not None:
+            runtime.current_sizes["bid"].clear()
+            runtime.current_sizes["ask"].clear()
+            runtime.indicator_ids.clear()
+            runtime.request_ids.clear()
+            runtime.smoothed_indicator_values.clear()
+        if self._settings_owner_alias == alias:
+            self._settings_owner_alias = next(iter(self.instruments), None)
+        write_runtime_probe(
+            f"unsubscribe processed for {alias}; existed={runtime is not None}; "
+            f"removed_indicator_requests={removed_indicator_requests}; "
+            f"removed_response_requests={removed_response_requests}; "
+            f"remaining={sorted(self.instruments.keys())}; "
+            f"settings_owner={self._settings_owner_alias}"
+        )
 
     def on_response_data(self, addon: Any, req_id: int) -> None:
         del addon
@@ -535,9 +630,11 @@ class BookmapAddonRuntime:
         write_runtime_probe(
             f"setting changed {alias} {setting_name}={new_value}"
         )
-        
-        # Force an immediate UI update so the user sees the change in the subchart
-        self._update_indicators(runtime)
+
+        # Bookmap can replay settings before the instrument is fully active.
+        # Avoid pushing indicator points until we've seen a live interval.
+        if runtime.initialized:
+            self._update_indicators(runtime)
 
     def on_depth(self, addon: Any, alias: str, is_bid: bool, price: float, size: float) -> None:
         runtime = self.instruments.get(alias)
@@ -626,7 +723,7 @@ class BookmapAddonRuntime:
             # Only start status updates after a 2-second stabilization window
             if now - runtime.analyzer.last_status_update > 2.0 and (now - getattr(runtime, '_init_time', 0) > 2.0):
                 runtime.analyzer.last_status_update = now
-                self._write_queue.put((self._write_ticker_status, (alias, runtime.analyzer.generate_summary())))
+                self._enqueue_write(self._write_ticker_status, alias, runtime.analyzer.generate_summary())
 
         # Calculate integer price level for trades
         price_level = int(round(price / runtime.pips))
@@ -661,6 +758,8 @@ class BookmapAddonRuntime:
             return
 
         self._ensure_market_data_subscriptions(runtime)
+        if not runtime.subscriptions_started:
+            return
 
         self.callback_counts["interval"] += 1
         if self.callback_counts["interval"] % 50 == 0:
@@ -669,6 +768,12 @@ class BookmapAddonRuntime:
         best_bid_level, best_ask_level = self._get_bbo_levels(runtime)
         if self.callback_counts["interval"] % 50 == 0:
             write_runtime_probe(f"interval bbo {alias} bid={best_bid_level} ask={best_ask_level}")
+        if best_bid_level is None or best_ask_level is None:
+            return
+
+        if not runtime.initialized:
+            runtime.initialized = True
+            write_runtime_probe(f"[{alias}] first valid BBO observed; runtime initialized")
             
         event = NormalizedBookmapEvent(
             timestamp_ns=self._now_ns(),
@@ -776,7 +881,7 @@ class BookmapAddonRuntime:
             self.addon,
             alias,
             long_bias_request_id,
-            f"Long Bias ({runtime.long_bias_timeframe_minutes}m)",
+            "Long Bias",
             "BOTTOM",
             color=runtime.indicator_colors["long_bias"],
             is_modifiable=True,
@@ -785,7 +890,7 @@ class BookmapAddonRuntime:
             self.addon,
             alias,
             short_bias_request_id,
-            f"Short Bias ({runtime.short_bias_timeframe_minutes}m)",
+            "Short Bias",
             "BOTTOM",
             color=runtime.indicator_colors["short_bias"],
             is_modifiable=True,
@@ -794,7 +899,7 @@ class BookmapAddonRuntime:
             self.addon,
             alias,
             imbalance_request_id,
-            f"Imbalance ({runtime.top_book_imbalance_timeframe_minutes}m)",
+            "Imbalance",
             "BOTTOM",
             color=runtime.indicator_colors["top_book_imbalance"],
             is_modifiable=True,
@@ -803,7 +908,7 @@ class BookmapAddonRuntime:
             self.addon,
             alias,
             net_bias_request_id,
-            f"Net Bias ({runtime.net_bias_timeframe_minutes}m)",
+            "Net Bias",
             "BOTTOM",
             color=runtime.indicator_colors["net_bias"],
             is_modifiable=True,
@@ -814,61 +919,68 @@ class BookmapAddonRuntime:
         if runtime is None:
             return
 
-        # Use bm.add_number_settings_parameter(addon, alias, name, default, min, max, step)
-        # and bm.add_boolean_settings_parameter(addon, alias, name, default)
-        # These must be called during subscribe_instrument, not deferred.
+        if self._settings_owner_alias is None:
+            self._settings_owner_alias = alias
+        elif self._settings_owner_alias != alias:
+            write_runtime_probe(
+                f"skipping settings registration for secondary instrument {alias}; owner={self._settings_owner_alias}"
+            )
+            return
+
+        # Use typed Bookmap setting helpers here. The raw string-setting queue
+        # path proved fragile during second-instrument activation.
         try:
             bm.add_boolean_settings_parameter(
                 self.addon, alias, SETTING_ENABLE_POPUPS,
                 runtime.bookmap_alert_popups_enabled,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_NEAR_BOOK_TICKS,
-                str(int(runtime.engine.config.near_book_ticks)),
+                int(runtime.engine.config.near_book_ticks), 1, 50, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_FAST_WINDOW_SECONDS,
-                str(int(runtime.engine.config.fast_window_seconds)),
+                int(runtime.engine.config.fast_window_seconds), 1, 300, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_CONTEXT_WINDOW_MINUTES,
-                str(int(round(runtime.engine.config.context_window_seconds / 60))),
+                int(round(runtime.engine.config.context_window_seconds / 60)), 1, 120, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_PERSISTENCE_SECONDS,
-                str(int(runtime.engine.config.persistence_seconds)),
+                int(runtime.engine.config.persistence_seconds), 1, 300, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_RELOAD_SECONDS,
-                str(int(runtime.engine.config.reload_seconds)),
+                int(runtime.engine.config.reload_seconds), 1, 300, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_LARGE_LEVEL_FACTOR,
-                str(float(runtime.engine.config.large_level_factor)),
+                float(runtime.engine.config.large_level_factor), 1.0, 10.0, 0.1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_IMBALANCE_THRESHOLD,
-                str(float(abs(runtime.engine.config.imbalance_support_threshold))),
+                float(abs(runtime.engine.config.imbalance_support_threshold)), 0.01, 0.95, 0.01,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_AGGRESSION_THRESHOLD,
-                str(float(abs(runtime.engine.config.aggression_support_threshold))),
+                float(abs(runtime.engine.config.aggression_support_threshold)), 0.01, 0.95, 0.01,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_LONG_BIAS_TIMEFRAME_MINUTES,
-                str(int(runtime.long_bias_timeframe_minutes)),
+                int(runtime.long_bias_timeframe_minutes), 1, 180, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_SHORT_BIAS_TIMEFRAME_MINUTES,
-                str(int(runtime.short_bias_timeframe_minutes)),
+                int(runtime.short_bias_timeframe_minutes), 1, 180, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_NET_BIAS_TIMEFRAME_MINUTES,
-                str(int(runtime.net_bias_timeframe_minutes)),
+                int(runtime.net_bias_timeframe_minutes), 1, 180, 1,
             )
-            _add_string_setting_parameter(
+            bm.add_number_settings_parameter(
                 self.addon, alias, SETTING_TOP_BOOK_IMBALANCE_TIMEFRAME_MINUTES,
-                str(int(runtime.top_book_imbalance_timeframe_minutes)),
+                int(runtime.top_book_imbalance_timeframe_minutes), 1, 180, 1,
             )
         except Exception as exc:
             print(f"[CRYPTO] settings registration failed for {alias}: {exc}", flush=True)
@@ -991,6 +1103,8 @@ class BookmapAddonRuntime:
 
     def _update_indicators_throttled(self, runtime: InstrumentRuntime, result: EngineStepResult) -> None:
         now = time.time()
+        if now < self._ui_quiet_until:
+            return
         # Increased to 1.0s to reduce UI thread load
         if now - runtime.last_ui_update_time < 1.0:
             return
@@ -1006,6 +1120,9 @@ class BookmapAddonRuntime:
                 self._enqueue_write(self._emit_heartbeat_snapshot, runtime, "throttled heartbeat")
 
     def _update_indicators(self, runtime: InstrumentRuntime) -> None:
+        if not runtime.initialized:
+            return
+
         signals = runtime.engine.session.current_signals
         long_indicator_id = runtime.indicator_ids.get("long_bias")
         short_indicator_id = runtime.indicator_ids.get("short_bias")
@@ -1165,6 +1282,11 @@ class BookmapAddonRuntime:
                 "mid_level": snapshot.mid_level,
                 "best_bid_price": None if snapshot.best_bid_level is None else snapshot.best_bid_level * runtime.pips,
                 "best_ask_price": None if snapshot.best_ask_level is None else snapshot.best_ask_level * runtime.pips,
+                "best_bid_size": self._best_visible_quote_sizes(runtime)[0],
+                "best_ask_size": self._best_visible_quote_sizes(runtime)[1],
+                "micro_price": self._micro_price(runtime),
+                "visible_bid_levels": self._top_visible_book(runtime, "bid"),
+                "visible_ask_levels": self._top_visible_book(runtime, "ask"),
             },
             "features": {
                 "top_book_imbalance": snapshot.top_book_imbalance,
@@ -1233,6 +1355,49 @@ class BookmapAddonRuntime:
                 "bias_state": self._bias_state(result.signals),
                 "top_reasons": self._top_reasons(result.signals),
             },
+            "brain_feed": {
+                "timestamp_ns": snapshot.timestamp_ns,
+                "instrument": runtime.alias,
+                "market_state": {
+                    "best_bid_level": snapshot.best_bid_level,
+                    "best_ask_level": snapshot.best_ask_level,
+                    "best_bid_price": None if snapshot.best_bid_level is None else snapshot.best_bid_level * runtime.pips,
+                    "best_ask_price": None if snapshot.best_ask_level is None else snapshot.best_ask_level * runtime.pips,
+                    "best_bid_size": self._best_visible_quote_sizes(runtime)[0],
+                    "best_ask_size": self._best_visible_quote_sizes(runtime)[1],
+                    "micro_price": self._micro_price(runtime),
+                    "visible_bid_levels": self._top_visible_book(runtime, "bid"),
+                    "visible_ask_levels": self._top_visible_book(runtime, "ask"),
+                },
+                "orderflow": {
+                    "top_book_imbalance": snapshot.top_book_imbalance,
+                    "bid_stack_rate": snapshot.bid_stack_rate,
+                    "ask_stack_rate": snapshot.ask_stack_rate,
+                    "bid_pull_rate": snapshot.bid_pull_rate,
+                    "ask_pull_rate": snapshot.ask_pull_rate,
+                    "buy_aggressive_volume": snapshot.buy_aggressive_volume,
+                    "sell_aggressive_volume": snapshot.sell_aggressive_volume,
+                    "aggression_delta": snapshot.aggression_delta,
+                    "aggression_ratio": snapshot.aggression_ratio,
+                },
+                "display_metrics": {
+                    "display_long_bias": self._windowed_bias_strength(runtime, runtime.long_bias_timeframe_minutes, "long"),
+                    "display_short_bias": self._windowed_bias_strength(runtime, runtime.short_bias_timeframe_minutes, "short"),
+                    "display_net_bias": self._windowed_net_bias(runtime, runtime.net_bias_timeframe_minutes),
+                    "display_top_book_imbalance": self._windowed_top_book_imbalance(
+                        runtime,
+                        runtime.top_book_imbalance_timeframe_minutes,
+                    ),
+                },
+                "micro_price_analysis": {
+                    "velocity_ticks_per_sec": runtime.analyzer.current_velocity,
+                    "displacement_efficiency": runtime.analyzer.displacement_efficiency,
+                    "micro_trend": runtime.analyzer.micro_trend,
+                    "buy_volume_window": runtime.analyzer.total_buy_vol,
+                    "sell_volume_window": runtime.analyzer.total_sell_vol,
+                },
+                "heartbeat": False,
+            },
         }
         self.state_sink.emit(runtime.alias, payload)
 
@@ -1259,6 +1424,46 @@ class BookmapAddonRuntime:
                 "what_is_building": "No dominant level build detected",
                 "bias_state": "Mixed",
                 "top_reasons": [],
+            },
+            "brain_feed": {
+                "timestamp_ns": self._now_ns(),
+                "instrument": runtime.alias,
+                "market_state": {
+                    "best_bid_level": runtime.engine.session.best_bid_level,
+                    "best_ask_level": runtime.engine.session.best_ask_level,
+                    "best_bid_price": None if runtime.engine.session.best_bid_level is None else runtime.engine.session.best_bid_level * runtime.pips,
+                    "best_ask_price": None if runtime.engine.session.best_ask_level is None else runtime.engine.session.best_ask_level * runtime.pips,
+                    "best_bid_size": self._best_visible_quote_sizes(runtime)[0],
+                    "best_ask_size": self._best_visible_quote_sizes(runtime)[1],
+                    "micro_price": self._micro_price(runtime),
+                    "visible_bid_levels": self._top_visible_book(runtime, "bid"),
+                    "visible_ask_levels": self._top_visible_book(runtime, "ask"),
+                },
+                "orderflow": {
+                    "top_book_imbalance": 0.0,
+                    "bid_stack_rate": 0.0,
+                    "ask_stack_rate": 0.0,
+                    "bid_pull_rate": 0.0,
+                    "ask_pull_rate": 0.0,
+                    "buy_aggressive_volume": 0.0,
+                    "sell_aggressive_volume": 0.0,
+                    "aggression_delta": 0.0,
+                    "aggression_ratio": 0.0,
+                },
+                "display_metrics": {
+                    "display_long_bias": 0.0,
+                    "display_short_bias": 0.0,
+                    "display_net_bias": 0.0,
+                    "display_top_book_imbalance": 0.0,
+                },
+                "micro_price_analysis": {
+                    "velocity_ticks_per_sec": runtime.analyzer.current_velocity,
+                    "displacement_efficiency": runtime.analyzer.displacement_efficiency,
+                    "micro_trend": runtime.analyzer.micro_trend,
+                    "buy_volume_window": runtime.analyzer.total_buy_vol,
+                    "sell_volume_window": runtime.analyzer.total_sell_vol,
+                },
+                "heartbeat": True,
             },
         }
         self.state_sink.emit(runtime.alias, payload)
@@ -1289,6 +1494,44 @@ class BookmapAddonRuntime:
         if not candidates:
             return None
         return max(candidates, key=lambda level: (level.confidence_score, level.max_seen_size, level.persistence_score))
+
+    def _best_visible_quote_sizes(self, runtime: InstrumentRuntime) -> tuple[Optional[float], Optional[float]]:
+        best_bid_level, best_ask_level = self._get_bbo_levels(runtime)
+        best_bid_size = None
+        best_ask_size = None
+        if best_bid_level is not None:
+            best_bid_size = float(runtime.current_sizes["bid"].get(best_bid_level, 0.0))
+        if best_ask_level is not None:
+            best_ask_size = float(runtime.current_sizes["ask"].get(best_ask_level, 0.0))
+        return best_bid_size, best_ask_size
+
+    def _micro_price(self, runtime: InstrumentRuntime) -> Optional[float]:
+        best_bid_level, best_ask_level = self._get_bbo_levels(runtime)
+        if best_bid_level is None or best_ask_level is None:
+            return None
+        best_bid_size, best_ask_size = self._best_visible_quote_sizes(runtime)
+        if not best_bid_size or not best_ask_size:
+            return ((best_bid_level + best_ask_level) / 2.0) * runtime.pips
+        weighted_level = (
+            (best_ask_level * best_bid_size) + (best_bid_level * best_ask_size)
+        ) / (best_bid_size + best_ask_size)
+        return weighted_level * runtime.pips
+
+    def _top_visible_book(self, runtime: InstrumentRuntime, side: str, limit: int = 10) -> List[Dict[str, Any]]:
+        items = runtime.current_sizes[side].items()
+        if side == "bid":
+            ordered = sorted(items, key=lambda item: item[0], reverse=True)
+        else:
+            ordered = sorted(items, key=lambda item: item[0])
+        return [
+            {
+                "price_level": int(price_level),
+                "price": float(price_level * runtime.pips),
+                "size": float(size),
+            }
+            for price_level, size in ordered[:limit]
+            if size > 0
+        ]
 
     def _what_is_building(
         self,

@@ -1,0 +1,38 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - heading "BRAIN REMOTE" [level=2] [ref=e3]
+    - generic [ref=e6]: OPEN-VINO ENGINE LIVE
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: CONFLUENCE SCORE
+      - generic [ref=e10]: 0%
+    - generic [ref=e12]:
+      - generic [ref=e13]: OPENVINO READOUT
+      - generic [ref=e14]:
+        - generic [ref=e15]:
+          - generic [ref=e16]: Sentiment
+          - generic [ref=e17]: n/a
+          - generic [ref=e18]: Waiting for model output
+        - generic [ref=e19]:
+          - generic [ref=e20]: Forecast
+          - generic [ref=e21]: n/a
+          - generic [ref=e22]: Waiting for sequence read
+        - generic [ref=e23]:
+          - generic [ref=e24]: Verdict
+          - generic [ref=e25]: n/a
+          - generic [ref=e26]: Awaiting market sync
+    - generic [ref=e27]:
+      - 'textbox "Ask Brain: ''Is this the Heavy Absorption setup?''" [ref=e28]'
+      - generic [ref=e29]:
+        - button "CHECK SETUP" [ref=e30] [cursor=pointer]
+        - button "CLEAR" [ref=e31] [cursor=pointer]
+      - generic [ref=e32]: Expert opinion will appear here...
+    - generic [ref=e33]:
+      - generic [ref=e34]: QUICK NOTION SAVE
+      - generic [ref=e35]:
+        - button "SAVE WIN" [ref=e36] [cursor=pointer]
+        - button "SAVE LOSS" [ref=e37] [cursor=pointer]
+        - button "SKIP" [ref=e38] [cursor=pointer]
+    - generic [ref=e40]:
+      - generic [ref=e41]: 09:06:08
+      - generic [ref=e42]: System Ready - Waiting for Market Sync

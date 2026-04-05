@@ -1,0 +1,46 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - heading "BRAIN REMOTE" [level=2] [ref=e3]
+    - generic [ref=e6]: OPEN-VINO ENGINE LIVE
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: CONFLUENCE SCORE
+      - generic [ref=e10]: 43%
+    - generic [ref=e13]:
+      - generic [ref=e14]: OPENVINO READOUT
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - generic [ref=e17]: Sentiment
+          - generic [ref=e18]: Neutral
+          - generic [ref=e19]: +0.25 delta • 74% confidence
+        - generic [ref=e20]:
+          - generic [ref=e21]: Forecast
+          - generic [ref=e22]: bearish
+          - generic [ref=e23]: 0.022 raw • -0.96 directional bias
+        - generic [ref=e24]:
+          - generic [ref=e25]: Verdict
+          - generic [ref=e26]: Bearish pressure
+          - generic [ref=e27]: Score 43 • openvino
+      - generic [ref=e28]:
+        - generic [ref=e29]: "Source: XRPUSDT@BNF"
+        - generic [ref=e30]: "Last sync: 2026-04-04T15:50:29-05:00"
+    - generic [ref=e31]:
+      - 'textbox "Ask Brain: ''Is this the Heavy Absorption setup?''" [ref=e32]'
+      - generic [ref=e33]:
+        - button "CHECK SETUP" [ref=e34] [cursor=pointer]
+        - button "CLEAR" [ref=e35] [cursor=pointer]
+      - generic [ref=e36]: Bearish pressure
+      - generic [ref=e37]: "Connected: openvino backend"
+    - generic [ref=e38]:
+      - generic [ref=e39]: QUICK NOTION SAVE
+      - generic [ref=e40]:
+        - button "SAVE WIN" [ref=e41] [cursor=pointer]
+        - button "SAVE LOSS" [ref=e42] [cursor=pointer]
+        - button "SKIP" [ref=e43] [cursor=pointer]
+    - generic [ref=e44]:
+      - generic [ref=e45]:
+        - generic [ref=e46]: 15:50:29
+        - generic [ref=e47]: XRPUSDT@BNF | sentiment=Neutral(+0.25, conf=0.74) | forecast=bearish(0.022) | imbalance=0.00 | micro=13161.5 | bid=13161.0 ask=13162.0 | trend=Slightly Bearish | readiness=ready
+      - generic [ref=e48]:
+        - generic [ref=e49]: 09:06:08
+        - generic [ref=e50]: System Ready - Waiting for Market Sync

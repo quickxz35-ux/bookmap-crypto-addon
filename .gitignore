@@ -38,3 +38,10 @@ ENV/
 .idea/
 *.swp
 *.swo
+
+# Large Binaries & Database
+models/
+tools/
+ovms/
+openvino/
+*.sqlite

@@ -1,0 +1,43 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - heading "BRAIN REMOTE" [level=2] [ref=e3]
+    - generic [ref=e6]: OPEN-VINO ENGINE LIVE
+  - generic [ref=e7]:
+    - generic [ref=e8]:
+      - generic [ref=e9]: CONFLUENCE SCORE
+      - generic [ref=e10]: 72%
+    - generic [ref=e13]:
+      - generic [ref=e14]: OPENVINO READOUT
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - generic [ref=e17]: Sentiment
+          - generic [ref=e18]: n/a
+          - generic [ref=e19]: No sentiment details yet
+        - generic [ref=e20]:
+          - generic [ref=e21]: Forecast
+          - generic [ref=e22]: n/a
+          - generic [ref=e23]: No forecast details yet
+        - generic [ref=e24]:
+          - generic [ref=e25]: Verdict
+          - generic [ref=e26]: Bullish confluence
+          - generic [ref=e27]: Score 72 • openvino
+    - generic [ref=e28]:
+      - 'textbox "Ask Brain: ''Is this the Heavy Absorption setup?''" [ref=e29]'
+      - generic [ref=e30]:
+        - button "CHECK SETUP" [ref=e31] [cursor=pointer]
+        - button "CLEAR" [ref=e32] [cursor=pointer]
+      - generic [ref=e33]: Bullish confluence
+      - generic [ref=e34]: "Connected: openvino backend"
+    - generic [ref=e35]:
+      - generic [ref=e36]: QUICK NOTION SAVE
+      - generic [ref=e37]:
+        - button "SAVE WIN" [ref=e38] [cursor=pointer]
+        - button "SAVE LOSS" [ref=e39] [cursor=pointer]
+        - button "SKIP" [ref=e40] [cursor=pointer]
+    - generic [ref=e41]:
+      - generic [ref=e42]:
+        - generic [ref=e43]: 15:34:14
+        - generic [ref=e44]: RIVERUSDT@BNF | sentiment=Neutral(+0.23, conf=0.76) | forecast=bullish(0.784) | imbalance=0.00 | micro=12094.5 | bid=12094.0 ask=12095.0 | trend=Aggressive Bearish | readiness=ready
+      - generic [ref=e45]:
+        - generic [ref=e46]: 09:06:08
+        - generic [ref=e47]: System Ready - Waiting for Market Sync
