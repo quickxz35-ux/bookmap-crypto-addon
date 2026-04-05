@@ -45,3 +45,9 @@ tools/
 ovms/
 openvino/
 *.sqlite
+
+# Secondary Large Folders
+openvino_notebooks/
+vendor/
+bin/
+obj/
