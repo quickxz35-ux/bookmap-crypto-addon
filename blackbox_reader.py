@@ -179,6 +179,9 @@ class BlackBoxReader:
             )
         except Exception:
             return pd.DataFrame()
+
+    def recent_wallet_transactions(self, asset: Optional[str] = None, limit: int = 50) -> pd.DataFrame:
+        if asset:
             normalized = normalize_asset_symbol(asset)
             normalized_df = self._read_df(
                 """

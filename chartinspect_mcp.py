@@ -60,6 +60,80 @@ def fetch_chartinspect_crypto_price(symbol: str) -> dict:
     response.raise_for_status()
     return response.json()
 
+@mcp.tool()
+def get_chartinspect_onchain_status(chain: str) -> dict:
+    """Get the current on-chain status and latest block info for a blockchain.
+    
+    Args:
+        chain: The blockchain (e.g., 'bitcoin', 'ethereum').
+    """
+    url = f"{BASE_URL}/onchain/status"
+    params = {"chain": chain}
+    
+    response = requests.get(url, headers=get_headers(), params=params)
+    response.raise_for_status()
+    return response.json()
+
+@mcp.tool()
+def fetch_chartinspect_economic(indicator: str, days: int = 30) -> dict:
+    """Fetch macroeconomic data from ChartInspect (e.g., interest rates, CPI).
+    
+    Args:
+        indicator: The economic indicator (e.g., 'cpi', 'interest-rates').
+        days: Number of days of historical data to fetch (default 30).
+    """
+    url = f"{BASE_URL}/economic/{indicator}"
+    params = {"days": days}
+    
+    response = requests.get(url, headers=get_headers(), params=params)
+    response.raise_for_status()
+    return response.json()
+
+@mcp.tool()
+def fetch_chartinspect_market_indicator(indicator: str, days: int = 30) -> dict:
+    """Fetch market-wide indicators from ChartInspect (e.g., altcoin season index).
+    
+    Args:
+        indicator: The market indicator.
+        days: Number of days of historical data to fetch (default 30).
+    """
+    url = f"{BASE_URL}/market-indicators/{indicator}"
+    params = {"days": days}
+    
+    response = requests.get(url, headers=get_headers(), params=params)
+    response.raise_for_status()
+    return response.json()
+
+@mcp.tool()
+def fetch_chartinspect_exchange_etf(dataset: str, days: int = 30) -> dict:
+    """Fetch exchange reserves or ETF holdings data.
+    
+    Args:
+        dataset: The dataset name (e.g., 'reserves', 'etf-holdings').
+        days: Number of days of historical data to fetch (default 30).
+    """
+    url = f"{BASE_URL}/exchange-etf/{dataset}"
+    params = {"days": days}
+    
+    response = requests.get(url, headers=get_headers(), params=params)
+    response.raise_for_status()
+    return response.json()
+
+@mcp.tool()
+def fetch_chartinspect_derivatives(metric: str, chain: str = "bitcoin", days: int = 30) -> dict:
+    """Fetch futures open interest, funding rates, or other derivatives data.
+    
+    Args:
+        metric: The derivatives metric (e.g., 'open-interest', 'funding-rate').
+        chain: The blockchain context (default 'bitcoin').
+        days: Number of days of historical data to fetch (default 30).
+    """
+    url = f"{BASE_URL}/derivatives/{metric}"
+    params = {"chain": chain, "days": days}
+    
+    response = requests.get(url, headers=get_headers(), params=params)
+    response.raise_for_status()
+    return response.json()
 if __name__ == "__main__":
     # Run the server using stdio transport for MCP
     mcp.run()
