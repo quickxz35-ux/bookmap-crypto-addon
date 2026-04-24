@@ -25,9 +25,15 @@ class BlackBoxReader:
                 return pd.DataFrame([tuple(row) for row in rows], columns=columns)
 
     def _ensure_columns(self, frame: pd.DataFrame, defaults: Dict[str, Any]) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame([defaults])
         for column_name, default in defaults.items():
             if column_name not in frame.columns:
                 frame[column_name] = default
+            elif isinstance(default, float):
+                frame[column_name] = pd.to_numeric(frame[column_name], errors="coerce").fillna(0.0)
+            elif isinstance(default, int) and not isinstance(default, bool):
+                frame[column_name] = pd.to_numeric(frame[column_name], errors="coerce").fillna(0).astype(int)
         return frame
 
     def latest_derivatives(self, asset: str, limit: int = 20) -> pd.DataFrame:
@@ -79,10 +85,10 @@ class BlackBoxReader:
                 }
             )
             if "volume_24h" not in normalized_df.columns:
-                normalized_df["volume_24h"] = normalized_df.get("volume_absolute", 0.0)
+                normalized_df["volume_24h"] = pd.to_numeric(normalized_df.get("volume_absolute", 0.0), errors="coerce").fillna(0.0)
             return normalized_df
         try:
-            return self._read_df(
+            fallback_df = self._read_df(
                 """
                 SELECT *
                 FROM scout_deriv_snapshots
@@ -92,6 +98,43 @@ class BlackBoxReader:
                 """,
                 (normalized, limit),
             )
+            if not fallback_df.empty:
+                fallback_df = fallback_df.copy()
+                fallback_df = self._ensure_columns(
+                    fallback_df,
+                    {
+                        "snapshot_id": "",
+                        "observed_at": None,
+                        "asset": normalized,
+                        "raw_symbol": "",
+                        "venue": "",
+                        "timeframe": "",
+                        "open_interest": 0.0,
+                        "open_interest_change_pct": 0.0,
+                        "funding_rate": 0.0,
+                        "long_short_ratio": 0.0,
+                        "liquidations_total_usd": 0.0,
+                        "liquidations_long_usd": 0.0,
+                        "liquidations_short_usd": 0.0,
+                        "volume_absolute": 0.0,
+                        "volume_relative": 0.0,
+                        "volume_change_pct": 0.0,
+                        "mark_price": 0.0,
+                        "trade_count_24h": 0.0,
+                        "raw_payload_json": "{}",
+                    },
+                )
+                fallback_df = fallback_df.rename(
+                    columns={
+                        "observed_at": "timestamp",
+                        "open_interest": "oi_raw",
+                        "liquidations_total_usd": "liquidations_24h",
+                    }
+                )
+                if "volume_24h" not in fallback_df.columns:
+                    fallback_df["volume_24h"] = pd.to_numeric(fallback_df.get("volume_absolute", 0.0), errors="coerce").fillna(0.0)
+                return fallback_df
+            return pd.DataFrame()
         except Exception:
             return pd.DataFrame()
 
@@ -136,9 +179,6 @@ class BlackBoxReader:
             )
         except Exception:
             return pd.DataFrame()
-
-    def recent_wallet_transactions(self, asset: Optional[str] = None, limit: int = 50) -> pd.DataFrame:
-        if asset:
             normalized = normalize_asset_symbol(asset)
             normalized_df = self._read_df(
                 """
