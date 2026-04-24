@@ -11,89 +11,131 @@ class BlackBoxReader:
         self.db = LocalBlackBox()
 
     def _read_df(self, query: str, params: Optional[tuple] = None) -> pd.DataFrame:
+        query = query.replace("?", self.db.qmark)
         with self.db.get_connection() as conn:
-            return pd.read_sql_query(query, conn, params=params or ())
+            cursor = conn.cursor()
+            cursor.execute(query, params or ())
+            rows = cursor.fetchall()
+            if not rows:
+                return pd.DataFrame()
+            try:
+                return pd.DataFrame(rows)
+            except Exception:
+                columns = [desc[0] for desc in cursor.description or []]
+                return pd.DataFrame([tuple(row) for row in rows], columns=columns)
+
+    def _ensure_columns(self, frame: pd.DataFrame, defaults: Dict[str, Any]) -> pd.DataFrame:
+        for column_name, default in defaults.items():
+            if column_name not in frame.columns:
+                frame[column_name] = default
+        return frame
 
     def latest_derivatives(self, asset: str, limit: int = 20) -> pd.DataFrame:
         normalized = normalize_asset_symbol(asset)
-        normalized_df = self._read_df(
-            """
-            SELECT
-                snapshot_id,
-                observed_at AS timestamp,
-                asset,
-                raw_symbol,
-                venue,
-                timeframe,
-                open_interest AS oi_raw,
-                open_interest_change_pct,
-                funding_rate,
-                long_short_ratio,
-                liquidations_total_usd AS liquidations_24h,
-                liquidations_long_usd,
-                liquidations_short_usd,
-                volume_absolute AS volume_24h,
-                volume_absolute,
-                volume_relative,
-                volume_change_pct,
-                mark_price,
-                trade_count_24h,
-                raw_payload_json
-            FROM derivatives_snapshots
-            WHERE asset = ?
-            ORDER BY observed_at DESC
-            LIMIT ?
-            """,
-            (normalized, limit),
-        )
+        try:
+            normalized_df = self._read_df(
+                """
+                SELECT *
+                FROM derivatives_snapshots
+                WHERE asset = ?
+                ORDER BY observed_at DESC
+                LIMIT ?
+                """,
+                (normalized, limit),
+            )
+        except Exception:
+            normalized_df = pd.DataFrame()
         if not normalized_df.empty:
+            normalized_df = normalized_df.copy()
+            normalized_df = self._ensure_columns(
+                normalized_df,
+                {
+                    "snapshot_id": "",
+                    "observed_at": None,
+                    "asset": normalized,
+                    "raw_symbol": "",
+                    "venue": "",
+                    "timeframe": "",
+                    "open_interest": 0.0,
+                    "open_interest_change_pct": 0.0,
+                    "funding_rate": 0.0,
+                    "long_short_ratio": 0.0,
+                    "liquidations_total_usd": 0.0,
+                    "liquidations_long_usd": 0.0,
+                    "liquidations_short_usd": 0.0,
+                    "volume_absolute": 0.0,
+                    "volume_relative": 0.0,
+                    "volume_change_pct": 0.0,
+                    "mark_price": 0.0,
+                    "trade_count_24h": 0.0,
+                    "raw_payload_json": "{}",
+                },
+            )
+            normalized_df = normalized_df.rename(
+                columns={
+                    "observed_at": "timestamp",
+                    "open_interest": "oi_raw",
+                    "liquidations_total_usd": "liquidations_24h",
+                }
+            )
+            if "volume_24h" not in normalized_df.columns:
+                normalized_df["volume_24h"] = normalized_df.get("volume_absolute", 0.0)
             return normalized_df
-        return self._read_df(
-            """
-            SELECT *
-            FROM scout_deriv_snapshots
-            WHERE asset = ?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (normalized, limit),
-        )
+        try:
+            return self._read_df(
+                """
+                SELECT *
+                FROM scout_deriv_snapshots
+                WHERE asset = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (normalized, limit),
+            )
+        except Exception:
+            return pd.DataFrame()
 
     def recent_whale_events(self, asset: str, limit: int = 20) -> pd.DataFrame:
         normalized = normalize_asset_symbol(asset)
-        normalized_df = self._read_df(
-            """
-            SELECT
-                event_id,
-                observed_at AS timestamp,
-                asset,
-                source_provider AS source,
-                event_type AS move_type,
-                amount_native AS amount,
-                amount_usd AS usd_value,
-                wallet_address,
-                counterparty_address,
-                entity_label,
-                raw_payload_json AS raw_payload
-            FROM whale_events
-            WHERE asset = ?
-            ORDER BY observed_at DESC
-            LIMIT ?
-            """,
-            (normalized, limit),
-        )
+        try:
+            normalized_df = self._read_df(
+                """
+                SELECT
+                    event_id,
+                    observed_at AS timestamp,
+                    asset,
+                    source_provider AS source,
+                    event_type AS move_type,
+                    amount_native AS amount,
+                    amount_usd AS usd_value,
+                    wallet_address,
+                    counterparty_address,
+                    entity_label,
+                    raw_payload_json AS raw_payload
+                FROM whale_events
+                WHERE asset = ?
+                ORDER BY observed_at DESC
+                LIMIT ?
+                """,
+                (normalized, limit),
+            )
+        except Exception:
+            normalized_df = pd.DataFrame()
         if not normalized_df.empty:
             return normalized_df
-        return self._read_df(
-            """
-            SELECT *
-            FROM scout_whale_log
-            WHERE asset = ?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (normalized, limit),
-        )
+        try:
+            return self._read_df(
+                """
+                SELECT *
+                FROM scout_whale_log
+                WHERE asset = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (normalized, limit),
+            )
+        except Exception:
+            return pd.DataFrame()
 
     def recent_wallet_transactions(self, asset: Optional[str] = None, limit: int = 50) -> pd.DataFrame:
         if asset:
@@ -104,6 +146,7 @@ class BlackBoxReader:
                     tx_id,
                     observed_at AS timestamp,
                     wallet_address,
+                    wallet_alias,
                     tx_hash,
                     asset,
                     amount_native AS amount,
@@ -140,6 +183,7 @@ class BlackBoxReader:
                 tx_id,
                 observed_at AS timestamp,
                 wallet_address,
+                wallet_alias,
                 tx_hash,
                 asset,
                 amount_native AS amount,
@@ -171,74 +215,112 @@ class BlackBoxReader:
     def recent_sentiment(self, asset: Optional[str] = None, limit: int = 50) -> pd.DataFrame:
         if asset:
             normalized = normalize_asset_symbol(asset)
+            try:
+                normalized_df = self._read_df(
+                    """
+                    SELECT *
+                    FROM sentiment_logs
+                    WHERE asset = ?
+                    ORDER BY published_at DESC
+                    LIMIT ?
+                    """,
+                    (normalized, limit),
+                )
+            except Exception:
+                normalized_df = pd.DataFrame()
+            if not normalized_df.empty:
+                normalized_df = normalized_df.copy()
+                normalized_df = self._ensure_columns(
+                    normalized_df,
+                    {
+                        "story_id": "",
+                        "published_at": None,
+                        "asset": normalized,
+                        "source_provider": "",
+                        "source_domain": "",
+                        "headline": "",
+                        "url": "",
+                        "sentiment_label_raw": "",
+                        "sentiment_score_raw": 0.0,
+                        "topic_tags_json": "[]",
+                        "dedup_key": "",
+                        "raw_payload_json": "{}",
+                    },
+                )
+                normalized_df = normalized_df.rename(
+                    columns={
+                        "published_at": "timestamp",
+                        "source_provider": "source",
+                        "sentiment_score_raw": "raw_sentiment_score",
+                    }
+                )
+                return normalized_df
+        try:
             normalized_df = self._read_df(
                 """
-                SELECT
-                    story_id,
-                    published_at AS timestamp,
-                    asset,
-                    source_provider AS source,
-                    source_domain,
-                    headline,
-                    url,
-                    sentiment_label_raw,
-                    sentiment_score_raw AS raw_sentiment_score,
-                    topic_tags_json,
-                    dedup_key,
-                    raw_payload_json
+                SELECT *
                 FROM sentiment_logs
-                WHERE asset = ?
                 ORDER BY published_at DESC
                 LIMIT ?
                 """,
-                (normalized, limit),
+                (limit,),
             )
-            if not normalized_df.empty:
-                return normalized_df
-        normalized_df = self._read_df(
-            """
-            SELECT
-                story_id,
-                published_at AS timestamp,
-                asset,
-                source_provider AS source,
-                source_domain,
-                headline,
-                url,
-                sentiment_label_raw,
-                sentiment_score_raw AS raw_sentiment_score,
-                topic_tags_json,
-                dedup_key,
-                raw_payload_json
-            FROM sentiment_logs
-            ORDER BY published_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        except Exception:
+            normalized_df = pd.DataFrame()
         if not normalized_df.empty:
+            normalized_df = normalized_df.copy()
+            normalized_df = self._ensure_columns(
+                normalized_df,
+                {
+                    "story_id": "",
+                    "published_at": None,
+                    "asset": "",
+                    "source_provider": "",
+                    "source_domain": "",
+                    "headline": "",
+                    "url": "",
+                    "sentiment_label_raw": "",
+                    "sentiment_score_raw": 0.0,
+                    "topic_tags_json": "[]",
+                    "dedup_key": "",
+                    "raw_payload_json": "{}",
+                },
+            )
+            normalized_df = normalized_df.rename(
+                columns={
+                    "published_at": "timestamp",
+                    "source_provider": "source",
+                    "sentiment_score_raw": "raw_sentiment_score",
+                }
+            )
             return normalized_df
         if asset:
             normalized = normalize_asset_symbol(asset)
+            try:
+                return self._read_df(
+                    """
+                    SELECT *
+                    FROM scout_sentiment_log
+                    WHERE asset = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (normalized, limit),
+                )
+            except Exception:
+                return pd.DataFrame()
+        try:
             return self._read_df(
                 """
                 SELECT *
                 FROM scout_sentiment_log
-                WHERE asset = ?
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (normalized, limit),
+                (limit,),
             )
-        return self._read_df(
-            """
-            SELECT *
-            FROM scout_sentiment_log
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        except Exception:
+            return pd.DataFrame()
 
     def wallet_rank_inputs(self) -> pd.DataFrame:
         normalized_df = self._read_df(
@@ -247,6 +329,12 @@ class BlackBoxReader:
                 w.wallet_address,
                 w.alias,
                 w.category,
+                w.source_provider,
+                w.display_name,
+                w.top_rank,
+                w.account_value,
+                w.first_seen_at,
+                w.last_seen_at,
                 t.asset,
                 t.amount_native AS amount,
                 t.amount_usd,
@@ -269,6 +357,12 @@ class BlackBoxReader:
                 w.wallet_address,
                 w.alias,
                 w.category,
+                w.source_provider,
+                w.display_name,
+                w.top_rank,
+                w.account_value,
+                w.first_seen_at,
+                w.last_seen_at,
                 t.asset,
                 t.amount,
                 t.usd_value AS amount_usd,
@@ -282,6 +376,52 @@ class BlackBoxReader:
                 ON w.wallet_address = t.wallet_address
             ORDER BY t.id DESC
             """
+        )
+
+    def recent_wallet_leaderboard_changes(
+        self, limit: int = 200, change_types: Optional[Iterable[str]] = None
+    ) -> pd.DataFrame:
+        if change_types:
+            change_type_values = list(change_types)
+            placeholders = ",".join(["?"] * len(change_type_values))
+            params: List[Any] = change_type_values + [limit]
+            return self._read_df(
+                f"""
+                SELECT
+                    change_id,
+                    observed_at,
+                    source_provider,
+                    wallet_address,
+                    display_name,
+                    previous_rank,
+                    current_rank,
+                    change_type,
+                    raw_payload_json
+                FROM wallet_leaderboard_changes
+                WHERE change_type IN ({placeholders})
+                ORDER BY observed_at DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+
+        return self._read_df(
+            """
+            SELECT
+                change_id,
+                observed_at,
+                source_provider,
+                wallet_address,
+                display_name,
+                previous_rank,
+                current_rank,
+                change_type,
+                raw_payload_json
+            FROM wallet_leaderboard_changes
+            ORDER BY observed_at DESC
+            LIMIT ?
+            """,
+            (limit,),
         )
 
     def latest_cached_output(self, asset: str, agent_name: Optional[str] = None) -> pd.DataFrame:
@@ -306,6 +446,58 @@ class BlackBoxReader:
             LIMIT 1
             """,
             (normalized,),
+        )
+
+    def recent_analyst_outputs(
+        self,
+        limit: int = 200,
+        opportunity_types: Optional[Iterable[str]] = None,
+    ) -> pd.DataFrame:
+        if opportunity_types:
+            opportunity_values = list(opportunity_types)
+            placeholders = ",".join(["?"] * len(opportunity_values))
+            params: List[Any] = opportunity_values + [limit]
+            return self._read_df(
+                f"""
+                SELECT
+                    cache_id,
+                    generated_at,
+                    asset,
+                    agent_name,
+                    opportunity_type,
+                    lifecycle_state,
+                    confidence_score,
+                    summary_text,
+                    output_json,
+                    target_database,
+                    delivery_status
+                FROM analyst_output_cache
+                WHERE opportunity_type IN ({placeholders})
+                ORDER BY generated_at DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            )
+
+        return self._read_df(
+            """
+            SELECT
+                cache_id,
+                generated_at,
+                asset,
+                agent_name,
+                opportunity_type,
+                lifecycle_state,
+                confidence_score,
+                summary_text,
+                output_json,
+                target_database,
+                delivery_status
+            FROM analyst_output_cache
+            ORDER BY generated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
         )
 
     def get_cached_output(
@@ -334,6 +526,7 @@ class BlackBoxReader:
         output: Dict[str, Any],
         target_database: str = "",
         input_hash: str = "",
+        delivery_status: str = "cached",
     ) -> str:
         return self.db.cache_analyst_output(
             asset=normalize_asset_symbol(asset),
@@ -345,6 +538,7 @@ class BlackBoxReader:
             output=output,
             target_database=target_database,
             input_hash=input_hash,
+            delivery_status=delivery_status,
         )
 
     def update_delivery_state(self, cache_id: str, delivery_status: str) -> None:

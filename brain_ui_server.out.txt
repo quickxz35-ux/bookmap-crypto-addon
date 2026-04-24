@@ -1,0 +1,2 @@
+Serving Brain UI from C:\Users\gssjr\OneDrive\Desktop\CRYPTO TOOLS\brain_remote.html
+Open: http://127.0.0.1:8000/brain_remote.html

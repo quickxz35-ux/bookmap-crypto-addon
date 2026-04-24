@@ -1,10 +1,11 @@
-import requests
 import time
-import sqlite3
-import os
 import logging
 from local_blackbox import LocalBlackBox
-import moralis_handler as moralis # Reuse existing handler
+
+try:
+    import moralis_handler as moralis  # Optional portfolio provider hook when available
+except ImportError:  # pragma: no cover - optional provider
+    moralis = None
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -14,6 +15,7 @@ class WhaleScout:
     def __init__(self):
         self.db = LocalBlackBox()
         self.strike_threshold_usd = 500000 # Default $500k Whale Move
+        self.provider_available = moralis is not None
         self.exchange_watch_wallets = [
             {
                 "label": "Binance_Whale",
@@ -28,12 +30,15 @@ class WhaleScout:
         In the skeleton, we simulate this by checking specific exchange-linked wallets.
         """
         logger.info(f"🐋 Whale Scout is probing CEX flows for {len(assets)} assets...")
+        if not self.provider_available:
+            logger.warning("⚠️ Whale Scout is running without a portfolio provider; skipping portfolio probe cycle.")
+            return
 
         for wallet in self.exchange_watch_wallets:
             try:
                 portfolio = moralis.get_wallet_portfolio(wallet["address"], chain=wallet["chain"])
             except Exception as e:
-                logger.error(f"❌ Error fetching Moralis portfolio for {wallet['label']}: {e}")
+                logger.error(f"❌ Error fetching portfolio data for {wallet['label']}: {e}")
                 continue
 
             if not portfolio:
@@ -58,11 +63,12 @@ class WhaleScout:
 
     def record_move(self, asset, source, move_type, amount, usd_value, raw_payload):
         """Saves a Whale Move to the Local Black Box."""
+        ph = self.db.qmark
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
+            cursor.execute(f'''
                 INSERT INTO scout_whale_log (asset, source, move_type, amount, usd_value, raw_payload)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph})
             ''', (asset, source, move_type, amount, usd_value, raw_payload))
             conn.commit()
             logger.info(f"🚩 WHALE STRIKE: {asset} Move detected! (${usd_value:,.0f} from {source})")
@@ -75,5 +81,11 @@ class WhaleScout:
             time.sleep(interval)
 
 if __name__ == "__main__":
+    from worker_smoke import run_worker_smoke_check
+
+    run_worker_smoke_check(
+        "validation-scout",
+        required_tables=("scout_whale_log",),
+    )
     scout = WhaleScout()
     scout.run()

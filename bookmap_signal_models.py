@@ -13,7 +13,7 @@ class EngineConfig:
     instrument: str
     pips: float
     size_multiplier: float
-    near_book_ticks: int = 30
+    near_book_ticks: int = 200
     fast_window_seconds: int = 90
     context_window_seconds: int = 900
     new_level_cooldown_seconds: int = 60

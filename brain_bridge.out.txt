@@ -1,0 +1,4 @@
+Brain bridge listening on http://127.0.0.1:5000
+Latest feed: C:\Bookmap\Config\runs\brain_feed_latest.json
+History feed: C:\Bookmap\Config\runs\brain_feed_history.jsonl
+OpenVINO brain ready: True

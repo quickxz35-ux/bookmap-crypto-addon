@@ -96,6 +96,41 @@ class SentimentScout:
         url = str(story.get("url") or "").strip().lower()
         return hashlib.sha1(url.encode("utf-8")).hexdigest()
 
+    def _table_columns(self, conn, table_name: str) -> set:
+        if self.db.is_postgres:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+                """,
+                (table_name,),
+            )
+            return {row["column_name"] for row in cursor.fetchall()}
+
+        cursor = conn.cursor()
+        return {row["name"] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()}
+
+    def _insert_supported_row(
+        self,
+        cursor,
+        table_name: str,
+        row: Dict[str, object],
+        supported_columns: set,
+        preferred_columns: List[str],
+    ) -> None:
+        columns = [column for column in preferred_columns if column in supported_columns and row.get(column) is not None]
+        if not columns:
+            return
+        placeholder = self.db.qmark
+        sql = f"""
+            INSERT INTO {table_name} (
+                {', '.join(columns)}
+            ) VALUES ({', '.join([placeholder] * len(columns))})
+        """
+        cursor.execute(sql, tuple(row[column] for column in columns))
+
     def _story_rows(self, story: Dict[str, object]) -> List[Dict[str, object]]:
         assets = self._extract_assets(story)
         normalized = self._normalized_sentiment(story)
@@ -125,36 +160,71 @@ class SentimentScout:
     def record_news(self, news_list: List[Dict[str, object]]) -> None:
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
+            sentiment_columns = self._table_columns(conn, "sentiment_logs")
+            legacy_columns = self._table_columns(conn, "scout_sentiment_log")
             new_count = 0
             for story in news_list:
                 for row in self._story_rows(story):
-                    cursor.execute("SELECT story_id FROM sentiment_logs WHERE story_id = ?", (row["story_id"],))
+                    cursor.execute(f"SELECT story_id FROM sentiment_logs WHERE story_id = {self.db.qmark}", (row["story_id"],))
                     if cursor.fetchone():
                         continue
-                    
+
                     # Log to both normalized and legacy tables for backward compatibility
-                    cursor.execute("""
-                        INSERT INTO sentiment_logs (
-                            story_id, published_at, asset, source_provider, source_domain, headline, url,
-                            sentiment_label_raw, sentiment_score_raw, topic_tags_json, dedup_key, raw_payload_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        row["story_id"], row["published_at"], row["asset"], row["source_provider"],
-                        row["source_domain"], row["headline"], row["url"], row["sentiment_label_raw"],
-                        row["sentiment_score_raw"], row["topic_tags_json"], row["dedup_key"], row["raw_payload_json"]
-                    ))
-                    
-                    cursor.execute("""
-                        INSERT INTO scout_sentiment_log (
-                            asset, source, headline, url, raw_sentiment_score, story_id, published_at,
-                            source_domain, sentiment_label_raw, topic_tags_json, dedup_key, raw_payload_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        row["asset"], row["source_provider"], row["headline"], row["url"],
-                        row["sentiment_score_raw"], row["story_id"], row["published_at"],
-                        row["source_domain"], row["sentiment_label_raw"], row["topic_tags_json"],
-                        row["dedup_key"], row["raw_payload_json"]
-                    ))
+                    self._insert_supported_row(
+                        cursor,
+                        "sentiment_logs",
+                        row,
+                        sentiment_columns,
+                        [
+                            "story_id",
+                            "published_at",
+                            "asset",
+                            "source_provider",
+                            "source_domain",
+                            "headline",
+                            "url",
+                            "sentiment_label_raw",
+                            "sentiment_score_raw",
+                            "topic_tags_json",
+                            "dedup_key",
+                            "raw_payload_json",
+                        ],
+                    )
+
+                    legacy_row = {
+                        "asset": row["asset"],
+                        "source": row["source_provider"],
+                        "headline": row["headline"],
+                        "url": row["url"],
+                        "raw_sentiment_score": row["sentiment_score_raw"],
+                        "story_id": row["story_id"],
+                        "published_at": row["published_at"],
+                        "source_domain": row["source_domain"],
+                        "sentiment_label_raw": row["sentiment_label_raw"],
+                        "topic_tags_json": row["topic_tags_json"],
+                        "dedup_key": row["dedup_key"],
+                        "raw_payload_json": row["raw_payload_json"],
+                    }
+                    self._insert_supported_row(
+                        cursor,
+                        "scout_sentiment_log",
+                        legacy_row,
+                        legacy_columns,
+                        [
+                            "asset",
+                            "source",
+                            "headline",
+                            "url",
+                            "raw_sentiment_score",
+                            "story_id",
+                            "published_at",
+                            "source_domain",
+                            "sentiment_label_raw",
+                            "topic_tags_json",
+                            "dedup_key",
+                            "raw_payload_json",
+                        ],
+                    )
                     new_count += 1
             conn.commit()
             if new_count > 0:
@@ -170,5 +240,11 @@ class SentimentScout:
 
 
 if __name__ == "__main__":
+    from worker_smoke import run_worker_smoke_check
+
+    run_worker_smoke_check(
+        "sentiment-scout",
+        required_tables=("sentiment_logs", "scout_sentiment_log"),
+    )
     scout = SentimentScout()
     scout.run()

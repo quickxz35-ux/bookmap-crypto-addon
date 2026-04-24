@@ -21,6 +21,18 @@ class OutboxProcessor:
         self.market_router = DecisionRouter()
         self.onchain_router = OnChainDecisionRouter()
 
+    def _field(self, row, key: str, index: int):
+        if isinstance(row, dict):
+            return row.get(key)
+        return row[index]
+
+    def _parse_output(self, output_json):
+        if isinstance(output_json, dict):
+            return output_json
+        if not output_json:
+            return {}
+        return json.loads(output_json)
+
     def process_pending_signals(self):
         """Polls the database for pending signals and delivers them."""
         with self.db.get_connection() as conn:
@@ -40,21 +52,39 @@ class OutboxProcessor:
         logger.info(f"📬 Found {len(rows)} pending signals to deliver...")
 
         for row in rows:
-            cache_id, asset, agent_name, opp_type, output_json_str, target_db = row
-            output = json.loads(output_json_str)
+            cache_id = self._field(row, "cache_id", 0)
+            asset = self._field(row, "asset", 1)
+            agent_name = self._field(row, "agent_name", 2)
+            opp_type = self._field(row, "opportunity_type", 3)
+            output_json = self._field(row, "output_json", 4)
+            target_db = self._field(row, "target_database", 5)
+            output = self._parse_output(output_json)
             
             try:
                 # Routing Logic based on Opportunity Type
                 result = None
                 
                 # 🛠️ ON-CHAIN DATA (Wallet/Whale Intelligence)
-                if opp_type in ["wallet_ranking", "wallet_stats", "whale_strike"]:
+                if opp_type in ["wallet_ranking", "wallet_stats", "wallet_discovery", "wallet_update", "whale_strike"]:
                     logger.info(f"🚚 Delivering ON-CHAIN signal for {asset} via OnChainDecisionRouter...")
                     if opp_type == "whale_strike":
                         result = self.onchain_router.route_whale_strike(output)
+                    elif opp_type == "wallet_discovery":
+                        result = self.onchain_router.route_wallet_discovery(output)
+                    elif opp_type == "wallet_update":
+                        result = self.onchain_router.route_wallet_update(output)
                     else:
                         result = self.onchain_router.route_wallet_stats(output)
                 
+                # 🧠 COUNCIL SYNTHESIS (Shared verdict from scouts + analysts)
+                elif opp_type == "council_thesis":
+                    logger.info(f"🚚 Delivering COUNCIL signal for {asset} via DecisionRouter...")
+                    result = self.market_router.route_council_thesis(output)
+
+                elif opp_type == "trade_candidate":
+                    logger.info(f"🚚 Delivering TRADE CANDIDATE for {asset} via DecisionRouter...")
+                    result = self.market_router.route_trade_candidate(output)
+
                 # 📈 MARKET SIGNALS (Trade Setups)
                 elif opp_type in ["scalp", "long_term"]:
                     logger.info(f"🚚 Delivering MARKET signal for {asset} via DecisionRouter...")
@@ -75,7 +105,9 @@ class OutboxProcessor:
                     continue
 
                 if result:
-                    logger.info(f"✅ Delivered {opp_type} signal for {asset}. Action: {result.get('notion', result.get('notion_action'))}")
+                    action = result.get("notion", result.get("notion_action", "routed"))
+                    self.db.update_cache_delivery(cache_id, f"router_{action}")
+                    logger.info(f"✅ Delivered {opp_type} signal for {asset}. Action: {action}")
             
             except Exception as e:
                 logger.error(f"❌ Failed to deliver signal {cache_id}: {e}")
@@ -93,5 +125,11 @@ class OutboxProcessor:
             time.sleep(interval)
 
 if __name__ == "__main__":
+    from worker_smoke import run_worker_smoke_check
+
+    run_worker_smoke_check(
+        "decision-router",
+        required_tables=("analyst_output_cache",),
+    )
     processor = OutboxProcessor()
     processor.start()

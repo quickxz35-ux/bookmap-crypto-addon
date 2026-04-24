@@ -22,7 +22,6 @@ wheels/
 # Bookmap Logs and Runtime Data
 runs/
 *.jsonl
-*.txt
 *.jar
 *.tmp
 

@@ -157,7 +157,7 @@ DISPLAY_SMOOTHING_ALPHA_BIAS = 0.35
 DISPLAY_SMOOTHING_ALPHA_IMBALANCE = 0.25
 DEFAULT_LONG_BIAS_COLOR = (0, 255, 0)
 DEFAULT_SHORT_BIAS_COLOR = (255, 64, 64)
-DEFAULT_TOP_BOOK_IMBALANCE_COLOR = (64, 160, 255)
+DEFAULT_TOP_BOOK_IMBALANCE_COLOR = (0, 80, 255)
 DEFAULT_NET_BIAS_COLOR = (255, 215, 0)
 
 SETTING_ENABLE_POPUPS = "SHOW ALERT POPUPS"
@@ -660,8 +660,12 @@ class BookmapAddonRuntime:
             # Check if price is within 'near_book_ticks' range (default 100-200)
             mid = (best_bid + best_ask) // 2
             if abs(price_level - mid) > runtime.engine.config.near_book_ticks:
-                # Still update the internal Bookmap book so Heatmap looks okay
-                # but skip our expensive signal engine processing
+                # Still pulse the engine clock so its internal time windows advance
+                runtime.engine.process_event(NormalizedBookmapEvent(
+                    event_type="clock",
+                    instrument=alias,
+                    timestamp_ns=self._now_ns()
+                ))
                 return
 
         # Update our local tracking map for fallback BBO calculation
@@ -1123,17 +1127,22 @@ class BookmapAddonRuntime:
         if not runtime.initialized:
             return
 
-        signals = runtime.engine.session.current_signals
+        # signals = runtime.engine.session.current_signals # Unused
         long_indicator_id = runtime.indicator_ids.get("long_bias")
         short_indicator_id = runtime.indicator_ids.get("short_bias")
         imbalance_indicator_id = runtime.indicator_ids.get("top_book_imbalance")
         net_bias_indicator_id = runtime.indicator_ids.get("net_bias")
         snapshot = runtime.engine.session.recent_feature_snapshots[-1] if runtime.engine.session.recent_feature_snapshots else None
+        
         if long_indicator_id is not None:
             long_bias_display = self._windowed_bias_strength(runtime, runtime.long_bias_timeframe_minutes, "long")
+            if long_bias_display > 0:
+                write_runtime_probe(f"[{runtime.alias}] indicator long_bias={long_bias_display:.2f}")
             bm.add_point(self.addon, runtime.alias, long_indicator_id, long_bias_display)
         if short_indicator_id is not None:
             short_bias_display = self._windowed_bias_strength(runtime, runtime.short_bias_timeframe_minutes, "short")
+            if short_bias_display > 0:
+                write_runtime_probe(f"[{runtime.alias}] indicator short_bias={short_bias_display:.2f}")
             bm.add_point(self.addon, runtime.alias, short_indicator_id, short_bias_display)
         if imbalance_indicator_id is not None and snapshot is not None:
             imbalance_display = self._windowed_top_book_imbalance(
@@ -1685,6 +1694,8 @@ def main(
     alert_path: str = "runs/bookmap_alerts.jsonl",
     snapshot_dir: str = "runs/bookmap_snapshots",
     snapshot_history_path: str = "runs/bookmap_snapshots_history.jsonl",
+    brain_latest_path: str = "runs/brain_feed_latest.json",
+    brain_history_path: str = "runs/brain_feed_history.jsonl",
 ) -> None:
     write_runtime_probe("main entered")
     global RUNTIME
@@ -1699,6 +1710,8 @@ def main(
         alert_path=alert_path,
         snapshot_dir=snapshot_dir,
         snapshot_history_path=snapshot_history_path,
+        brain_latest_path=brain_latest_path,
+        brain_history_path=brain_history_path,
     )
     write_runtime_probe("runtime created")
 

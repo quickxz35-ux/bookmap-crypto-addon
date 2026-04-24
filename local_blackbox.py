@@ -9,8 +9,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 try:
     import psycopg2
+    from psycopg2.extras import RealDictCursor
 except ImportError:  # pragma: no cover - optional in some local environments
     psycopg2 = None
+    RealDictCursor = None
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -27,38 +29,230 @@ def _is_enabled(value: str) -> bool:
 
 class LocalBlackBox:
     def __init__(self, db_path: Optional[str] = None):
+        # Database URL detection (Primary for Railway)
+        self.db_url = os.getenv("DATABASE_URL", "")
+        self.is_postgres = _is_real(self.db_url) and psycopg2 is not None
+        self._pg_conn = None
+        
+        # Fallback to SQLite for local development
         configured_path = db_path or os.getenv("LOCAL_BLACKBOX_PATH") or "local_blackbox.sqlite"
         self.db_path = str(Path(configured_path))
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        if not self.is_postgres:
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        self.mode = (os.getenv("BLACKBOX_MODE", "local_first") or "local_first").strip().lower()
-        self.db_url = os.getenv("DATABASE_URL", "")
-        self.mirror_enabled = (
-            _is_enabled(os.getenv("RAILWAY_MIRROR_ENABLED", "false"))
-            and _is_real(self.db_url)
-            and psycopg2 is not None
-        )
         self.init_db()
 
-    def get_connection(self) -> sqlite3.Connection:
+    def get_connection(self):
+        """Returns a connection to Postgres on Railway or SQLite locally."""
+        if self.is_postgres:
+            if self._pg_conn is None or self._pg_conn.closed:
+                self._pg_conn = psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
+            return self._pg_conn
+        
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def get_mirror_connection(self):
-        if not self.mirror_enabled:
-            return None
-        return psycopg2.connect(self.db_url)
+    @property
+    def qmark(self) -> str:
+        """Returns the correct parameter placeholder for the active database."""
+        return "%s" if self.is_postgres else "?"
 
     def init_db(self) -> None:
-        logger.info("Initializing Local Black Box at %s", self.db_path)
+        """Creates the necessary tables in either Postgres or SQLite."""
+        db_type = "Postgres" if self.is_postgres else "SQLite"
+        logger.info(f"Initializing Shared Brain via {db_type}")
+        
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            self._create_schema_meta(cursor)
-            self._create_legacy_tables(cursor)
-            self._migrate_legacy_tables(cursor)
-            self._create_normalized_tables(cursor)
-            self._create_operational_tables(cursor)
+            
+            # Universal Schema (Compatible with both)
+            auto_inc = "SERIAL PRIMARY KEY" if self.is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+            text_type = "TEXT"
+            ts_type = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP" if self.is_postgres else "DATETIME DEFAULT CURRENT_TIMESTAMP"
+
+            # 🐋 Whale Log
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS scout_whale_log (
+                    id {auto_inc},
+                    timestamp {ts_type},
+                    asset {text_type} NOT NULL,
+                    source {text_type},
+                    move_type {text_type},
+                    amount REAL,
+                    usd_value REAL,
+                    raw_payload {text_type}
+                )
+            """)
+
+            # 📈 Derivatives Snapshots
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS derivatives_snapshots (
+                    snapshot_id {text_type} PRIMARY KEY,
+                    observed_at {ts_type},
+                    asset {text_type} NOT NULL,
+                    venue {text_type} NOT NULL,
+                    timeframe {text_type} NOT NULL,
+                    open_interest REAL,
+                    funding_rate REAL,
+                    long_short_ratio REAL,
+                    liquidations_total_usd REAL,
+                    volume_change_pct REAL,
+                    raw_payload_json {text_type} NOT NULL
+                )
+            """)
+
+            # 📰 Sentiment Logs
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS sentiment_logs (
+                    story_id {text_type} PRIMARY KEY,
+                    published_at {ts_type},
+                    asset {text_type},
+                    source_provider {text_type} NOT NULL,
+                    headline {text_type} NOT NULL,
+                    url {text_type},
+                    sentiment_score_raw REAL,
+                    raw_payload_json {text_type} NOT NULL
+                )
+            """)
+            
+            # 📬 Analyst Output Cache (The Output Bulletin Board)
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS analyst_output_cache (
+                    cache_id {text_type} PRIMARY KEY,
+                    generated_at {ts_type},
+                    asset {text_type} NOT NULL,
+                    agent_name {text_type} NOT NULL,
+                    opportunity_type {text_type} NOT NULL,
+                    lifecycle_state {text_type},
+                    confidence_score REAL,
+                    summary_text {text_type},
+                    output_json {text_type} NOT NULL,
+                    delivery_status {text_type} NOT NULL DEFAULT 'pending'
+                )
+            """)
+
+            # 🛰️ Hyperscreener wallet discovery snapshots
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS wallet_leaderboard_snapshots (
+                    snapshot_id {text_type} PRIMARY KEY,
+                    observed_at {ts_type},
+                    source_provider {text_type} NOT NULL,
+                    source_url {text_type},
+                    wallet_address {text_type} NOT NULL,
+                    display_name {text_type},
+                    rank INTEGER,
+                    account_value REAL,
+                    is_new_wallet INTEGER DEFAULT 0,
+                    raw_payload_json {text_type} NOT NULL
+                )
+            """)
+
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS wallet_leaderboard_changes (
+                    change_id {text_type} PRIMARY KEY,
+                    observed_at {ts_type},
+                    source_provider {text_type} NOT NULL,
+                    wallet_address {text_type} NOT NULL,
+                    display_name {text_type},
+                    previous_rank INTEGER,
+                    current_rank INTEGER,
+                    change_type {text_type} NOT NULL,
+                    raw_payload_json {text_type} NOT NULL
+                )
+            """)
+
+            # Existing watchlist store, extended with Hyperscreener metadata.
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS wallet_watchlist (
+                    id {auto_inc},
+                    wallet_address {text_type} UNIQUE,
+                    alias {text_type},
+                    category {text_type},
+                    is_active INTEGER DEFAULT 1,
+                    last_balance_check {ts_type}
+                )
+            """)
+
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS scout_wallet_tx (
+                    id {auto_inc},
+                    timestamp {ts_type},
+                    wallet_address {text_type} NOT NULL,
+                    tx_hash {text_type} UNIQUE,
+                    asset {text_type},
+                    amount REAL,
+                    usd_value REAL,
+                    tx_type {text_type},
+                    counterparty {text_type}
+                )
+            """)
+
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS analyst_wallet_stats (
+                    wallet_address {text_type} PRIMARY KEY,
+                    win_rate REAL,
+                    total_pnl_usd REAL,
+                    best_trade_ticker {text_type},
+                    last_updated {ts_type}
+                )
+            """)
+
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS selected_asset_queue (
+                    queue_id {auto_inc},
+                    queue_key {text_type},
+                    asset {text_type} NOT NULL,
+                    source_board {text_type} NOT NULL,
+                    opportunity_type {text_type},
+                    priority INTEGER DEFAULT 50,
+                    reason {text_type},
+                    status {text_type} NOT NULL DEFAULT 'pending',
+                    requested_by {text_type},
+                    payload_json {text_type},
+                    created_at {ts_type},
+                    updated_at {ts_type},
+                    last_checked_at TIMESTAMP,
+                    last_validation_status {text_type},
+                    last_validated_at TIMESTAMP
+                )
+            """)
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS selected_asset_queue_asset_source_idx ON selected_asset_queue (asset, source_board)"
+            )
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS selected_asset_queue_queue_key_idx ON selected_asset_queue (queue_key)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS selected_asset_queue_status_idx ON selected_asset_queue (status, priority DESC, updated_at DESC)"
+            )
+
+            for table_name, columns in {
+                "wallet_watchlist": {
+                    "source_provider": "TEXT",
+                    "display_name": "TEXT",
+                    "top_rank": "INTEGER",
+                    "account_value": "REAL",
+                    "first_seen_at": "DATETIME",
+                    "last_seen_at": "DATETIME",
+                },
+                "scout_wallet_tx": {
+                    "source_provider": "TEXT",
+                    "wallet_rank": "INTEGER",
+                    "leaderboard_snapshot_at": "DATETIME",
+                    "raw_payload_json": "TEXT",
+                },
+                "analyst_wallet_stats": {
+                    "status": "TEXT",
+                    "score": "REAL",
+                    "tx_count": "INTEGER",
+                    "asset_count": "INTEGER",
+                    "active_days": "INTEGER",
+                },
+            }.items():
+                for column_name, column_ddl in columns.items():
+                    self._ensure_column(cursor, table_name, column_name, column_ddl)
+
             conn.commit()
 
     def _create_schema_meta(self, cursor: sqlite3.Cursor) -> None:
@@ -382,11 +576,33 @@ class LocalBlackBox:
         cursor.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS selected_asset_queue_queue_key_idx ON selected_asset_queue (queue_key)"
         )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS selected_asset_queue_asset_source_idx ON selected_asset_queue (asset, source_board)"
+        )
 
     def _ensure_column(self, cursor: sqlite3.Cursor, table_name: str, column_name: str, column_ddl: str) -> None:
-        columns = {row["name"] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()}
+        if self.is_postgres:
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = %s
+                """,
+                (table_name,),
+            )
+            columns = {row["column_name"] for row in cursor.fetchall()}
+        else:
+            columns = {row["name"] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()}
         if column_name not in columns:
-            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_ddl}")
+            ddl = column_ddl
+            if self.is_postgres:
+                # SQLite-style migrations use DATETIME, which Postgres does not accept.
+                # Normalize those additions to a native timestamp type while preserving defaults.
+                ddl = ddl.replace("DATETIME", "TIMESTAMP")
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {ddl}")
+
+    def _placeholder(self) -> str:
+        return "%s" if self.is_postgres else "?"
 
     def cache_analyst_output(
         self,
@@ -400,21 +616,24 @@ class LocalBlackBox:
         output: Dict[str, Any],
         target_database: str = "",
         input_hash: str = "",
+        delivery_status: str = "cached",
     ) -> str:
         normalized_json = json.dumps(output, sort_keys=True, default=str)
         cache_id = hashlib.sha1(normalized_json.encode("utf-8")).hexdigest()
         generated_at = output.get("generated_at") or output.get("created_at") or output.get("timestamp")
         generated_at = generated_at or datetime.utcnow().isoformat()
+        ph = self._placeholder()
 
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 INSERT INTO analyst_output_cache (
                     cache_id, generated_at, asset, agent_name, opportunity_type, lifecycle_state,
                     confidence_score, summary_text, input_hash, output_json, target_database, delivery_status
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
-                    (SELECT delivery_status FROM analyst_output_cache WHERE cache_id = ?), 'cached'
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, COALESCE(
+                    (SELECT delivery_status FROM analyst_output_cache WHERE cache_id = {ph}), {ph}
                 ))
                 ON CONFLICT(cache_id) DO UPDATE SET
                     generated_at = excluded.generated_at,
@@ -438,18 +657,21 @@ class LocalBlackBox:
                     normalized_json,
                     target_database,
                     cache_id,
+                    delivery_status,
                 ),
             )
             conn.commit()
         return cache_id
 
     def update_cache_delivery(self, cache_id: str, delivery_status: str) -> None:
+        ph = self._placeholder()
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 UPDATE analyst_output_cache
-                SET delivery_status = ?, delivered_at = CURRENT_TIMESTAMP
-                WHERE cache_id = ?
+                SET delivery_status = {ph}, delivered_at = CURRENT_TIMESTAMP
+                WHERE cache_id = {ph}
                 """,
                 (delivery_status, cache_id),
             )
@@ -462,24 +684,28 @@ class LocalBlackBox:
         opportunity_type: str,
         input_hash: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        query = """
+        ph = self._placeholder()
+        query = f"""
             SELECT *
             FROM analyst_output_cache
-            WHERE asset = ? AND agent_name = ? AND opportunity_type = ?
+            WHERE asset = {ph} AND agent_name = {ph} AND opportunity_type = {ph}
         """
         params: List[Any] = [asset, agent_name, opportunity_type]
         if input_hash:
-            query += " AND input_hash = ?"
+            query += f" AND input_hash = {ph}"
             params.append(input_hash)
         query += " ORDER BY generated_at DESC LIMIT 1"
 
         with self.get_connection() as conn:
-            row = conn.execute(query, tuple(params)).fetchone()
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            row = cursor.fetchone()
         if not row:
             return None
         record = dict(row)
-        if record.get("output_json"):
-            record["output_json"] = json.loads(record["output_json"])
+        output_json = record.get("output_json")
+        if isinstance(output_json, str):
+            record["output_json"] = json.loads(output_json)
         return record
 
     def upsert_analyst_output(
@@ -500,15 +726,17 @@ class LocalBlackBox:
         delivered_at: Optional[str] = None,
     ) -> None:
         normalized_json = json.dumps(output_json, sort_keys=True, default=str)
+        ph = self._placeholder()
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 INSERT INTO analyst_output_cache (
                     cache_id, generated_at, asset, agent_name, opportunity_type, lifecycle_state,
                     confidence_score, summary_text, input_hash, output_json, target_database,
                     delivery_status, delivered_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 ON CONFLICT(cache_id) DO UPDATE SET
                     generated_at = excluded.generated_at,
                     lifecycle_state = excluded.lifecycle_state,
@@ -546,11 +774,13 @@ class LocalBlackBox:
         priority: int = 50,
         status: str = "pending",
     ) -> None:
+        ph = self._placeholder()
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 INSERT INTO selected_asset_queue (asset, source_board, priority, reason, status)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph})
                 ON CONFLICT(asset, source_board) DO UPDATE SET
                     priority = excluded.priority,
                     reason = excluded.reason,
@@ -579,14 +809,16 @@ class LocalBlackBox:
             "normal": 50,
             "low": 25,
         }.get(priority, 50)
+        ph = self._placeholder()
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 INSERT INTO selected_asset_queue (
                     queue_key, asset, source_board, opportunity_type, priority, status,
                     requested_by, payload_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
                 ON CONFLICT(asset, source_board) DO UPDATE SET
                     queue_key = excluded.queue_key,
                     opportunity_type = excluded.opportunity_type,
@@ -612,7 +844,8 @@ class LocalBlackBox:
 
     def fetch_selected_assets(self, limit: int = 25, statuses: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]:
         status_values = tuple(statuses or ("pending", "active"))
-        placeholders = ",".join("?" for _ in status_values)
+        ph = self._placeholder()
+        placeholders = ",".join(ph for _ in status_values)
         query = f"""
             SELECT
                 queue_key,
@@ -632,39 +865,45 @@ class LocalBlackBox:
             FROM selected_asset_queue
             WHERE status IN ({placeholders})
             ORDER BY priority DESC, updated_at DESC
-            LIMIT ?
+            LIMIT {ph}
         """
         with self.get_connection() as conn:
-            rows = conn.execute(query, (*status_values, limit)).fetchall()
+            cursor = conn.cursor()
+            cursor.execute(query, (*status_values, limit))
+            rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
     def mark_selected_asset_checked(self, asset: str, source_board: str, validation_status: str) -> None:
         next_status = "active" if validation_status in {"supportive", "mixed", "weak"} else "archived"
+        ph = self._placeholder()
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 UPDATE selected_asset_queue
                 SET last_checked_at = CURRENT_TIMESTAMP,
-                    last_validation_status = ?,
-                    status = ?,
+                    last_validation_status = {ph},
+                    status = {ph},
                     updated_at = CURRENT_TIMESTAMP
-                WHERE asset = ? AND source_board = ?
+                WHERE asset = {ph} AND source_board = {ph}
                 """,
                 (validation_status, next_status, asset, source_board),
             )
             conn.commit()
 
     def mark_selected_asset_validated(self, queue_key: str, status: str = "validated") -> None:
+        ph = self._placeholder()
         with self.get_connection() as conn:
-            conn.execute(
-                """
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
                 UPDATE selected_asset_queue
                 SET last_checked_at = CURRENT_TIMESTAMP,
                     last_validated_at = CURRENT_TIMESTAMP,
-                    last_validation_status = ?,
-                    status = ?,
+                    last_validation_status = {ph},
+                    status = {ph},
                     updated_at = CURRENT_TIMESTAMP
-                WHERE queue_key = ?
+                WHERE queue_key = {ph}
                 """,
                 (status, status, queue_key),
             )
