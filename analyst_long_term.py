@@ -3,6 +3,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 import re
+import pandas as pd
 
 from blackbox_reader import BlackBoxReader
 from lifecycle import initial_long_term_state, normalize_long_term_state
@@ -81,7 +82,8 @@ class LongTermCoinAnalyst:
                 result["conviction"] += 10
                 result["notes"].append("Tracked holder activity exists for this coin.")
             if not sentiment.empty:
-                sentiment_score = float(sentiment["raw_sentiment_score"].fillna(0).mean())
+                series = sentiment["raw_sentiment_score"].iloc[:, 0] if isinstance(sentiment.get("raw_sentiment_score"), pd.DataFrame) else sentiment.get("raw_sentiment_score")
+                sentiment_score = float(pd.to_numeric(series, errors="coerce").fillna(0).mean()) if series is not None else 0.0
                 if sentiment_score > 0:
                     result["support"]["narrative"] = "supportive"
                     result["conviction"] += 8
@@ -89,10 +91,18 @@ class LongTermCoinAnalyst:
                     result["support"]["narrative"] = "mixed"
             result["notes"].append("Using fallback long-term read until derivatives history arrives.")
         else:
-            oi_avg = float(deriv["oi_raw"].fillna(0).astype(float).mean()) if "oi_raw" in deriv else 0.0
-            funding_avg = float(deriv["funding_rate"].fillna(0).astype(float).mean()) if "funding_rate" in deriv else 0.0
-            volume_avg = float(deriv["volume_absolute"].fillna(0).astype(float).mean()) if "volume_absolute" in deriv else float(deriv["volume_24h"].fillna(0).astype(float).mean())
-            volume_relative_avg = float(deriv["volume_relative"].fillna(0).astype(float).mean()) if "volume_relative" in deriv else 0.0
+            def _safe_mean(df_obj, col_name):
+                if col_name not in df_obj:
+                    return 0.0
+                series = df_obj[col_name]
+                if isinstance(series, pd.DataFrame):
+                    series = series.iloc[:, 0]
+                return float(pd.to_numeric(series, errors="coerce").fillna(0).mean())
+
+            oi_avg = _safe_mean(deriv, "oi_raw")
+            funding_avg = _safe_mean(deriv, "funding_rate")
+            volume_avg = _safe_mean(deriv, "volume_absolute") if "volume_absolute" in deriv else _safe_mean(deriv, "volume_24h")
+            volume_relative_avg = _safe_mean(deriv, "volume_relative")
             if volume_avg > 0 and volume_relative_avg >= 1:
                 result["volume_quality"] = "healthy"
             elif volume_avg > 0:
@@ -107,7 +117,8 @@ class LongTermCoinAnalyst:
                 result["support"]["wallets"] = "supportive"
                 result["conviction"] += 10
             if not sentiment.empty:
-                sentiment_score = float(sentiment["raw_sentiment_score"].fillna(0).mean())
+                series = sentiment["raw_sentiment_score"].iloc[:, 0] if isinstance(sentiment.get("raw_sentiment_score"), pd.DataFrame) else sentiment.get("raw_sentiment_score")
+                sentiment_score = float(pd.to_numeric(series, errors="coerce").fillna(0).mean()) if series is not None else 0.0
                 if sentiment_score > 0:
                     result["support"]["narrative"] = "supportive"
                     result["conviction"] += 8
